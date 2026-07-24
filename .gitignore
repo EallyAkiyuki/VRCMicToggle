@@ -1,0 +1,14 @@
+# Build output
+VRCMic.exe
+
+# IntelliJ / Rider
+.idea/
+*.sln.DotSettings.user
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Temp files
+*.tmp
+*.log

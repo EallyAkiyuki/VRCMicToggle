@@ -1,5 +1,5 @@
 $out = "VRCMic.exe"
-$sourceFiles = @("Program.cs", "SettingsWindow.cs", "ColorPickerDialog.cs")
+$sourceFiles = @("src\Program.cs", "src\SettingsWindow.cs", "src\ColorPickerDialog.cs")
 
 $found = $false
 foreach ($dir in @(
@@ -29,10 +29,10 @@ foreach ($f in $sourceFiles) {
 }
 
 $buildArgs = @("/nologo", "/target:winexe", "/optimize+", "/unsafe", "/langversion:4", "/platform:anycpu", "/out:$out")
-if (Test-Path "VRCMic.ico") {
-    $buildArgs += "/win32icon:VRCMic.ico"
+if (Test-Path "resources\VRCMic.ico") {
+    $buildArgs += "/win32icon:resources\VRCMic.ico"
 } else {
-    Write-Host "WARNING: VRCMic.ico not found, building without icon." -ForegroundColor Yellow
+    Write-Host "WARNING: resources\VRCMic.ico not found, building without icon." -ForegroundColor Yellow
 }
 $buildArgs += "/reference:$refDir\System.Windows.Forms.dll"
 $buildArgs += "/reference:$refDir\System.Drawing.dll"

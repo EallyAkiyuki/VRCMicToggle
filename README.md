@@ -52,7 +52,7 @@
 .\build.ps1
 
 # 或手动编译
-& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
+& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
 
 ### 配置文件
@@ -118,7 +118,7 @@ Requires `.NET Framework 4.0+` (comes with Windows).
 .\build.ps1
 
 # Or compile manually
-& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
+& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
 
 ### Configuration
@@ -184,7 +184,7 @@ SlashColor=#ECECEC
 .\build.ps1
 
 # または手動コンパイル
-& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
+& "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
 
 ### 設定ファイル

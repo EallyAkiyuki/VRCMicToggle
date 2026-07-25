@@ -62,7 +62,6 @@
 ```
 HotkeyMods=0
 HotkeyKey=45
-TrackStatus=False
 RunOnStartup=False
 UnknownColor=#888888
 MutedColor=#F48FB1
@@ -128,7 +127,6 @@ Config file is at `%APPDATA%\VRCMicToggle\config.txt`. You can edit it manually:
 ```
 HotkeyMods=0
 HotkeyKey=45
-TrackStatus=False
 RunOnStartup=False
 UnknownColor=#888888
 MutedColor=#F48FB1
@@ -194,7 +192,6 @@ SlashColor=#ECECEC
 ```
 HotkeyMods=0
 HotkeyKey=45
-TrackStatus=False
 RunOnStartup=False
 UnknownColor=#888888
 MutedColor=#F48FB1

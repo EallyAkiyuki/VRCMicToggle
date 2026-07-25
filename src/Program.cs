@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Diagnostics;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -79,7 +80,6 @@ namespace VRCMicToggle
 
         private NotifyIcon _notify;
         private ToolStripMenuItem _statusItem;
-        private ToolStripMenuItem _trackItem;
         private ToolStripMenuItem _startupItem;
         private HotkeyWindow _window;
         private UdpClient _sender;
@@ -127,7 +127,7 @@ namespace VRCMicToggle
             InvalidateHotkeyDisplay();
             BuildTray();
             ApplyHotkey();
-            if (_config.TrackStatus) StartListener();
+            StartListener();
 
             if (!Config.Exists())
             {
@@ -135,6 +135,138 @@ namespace VRCMicToggle
             }
 
             ShowTip("VRC 麦克风切换已启动。快捷键：" + _cachedHotkeyDisplay);
+
+            System.Threading.Timer oscCheckTimer = null;
+            oscCheckTimer = new System.Threading.Timer(_ =>
+            {
+                oscCheckTimer.Dispose();
+                bool oscActive = CheckOscQuery();
+                if (!oscActive)
+                {
+                    bool vrcRunning = false;
+                    try { Process[] procs = Process.GetProcessesByName("VRChat"); vrcRunning = procs.Length > 0; } catch (Exception) { }
+                    try
+                    {
+                        _window.BeginInvoke((MethodInvoker)delegate
+                        {
+                            string reason = !vrcRunning
+                                ? "未检测到 VRChat 进程，可能是 VRChat 未启动。"
+                                : "已检测到 VRChat 进程，但 OSC 未开启。";
+                            MessageBox.Show(
+                                "VRCMicTool 未连接到 OSC\n\n" + reason + "\n\n" +
+                                "请确保：\n" +
+                                "1. VRChat 已启动\n" +
+                                "2. 在 VRChat 动作菜单中开启 OSC（Osc > Enabled）",
+                                "OSC 未连接", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        });
+                    }
+                    catch (InvalidOperationException) { }
+                }
+                else
+                {
+                    bool micMuted = QueryMicState();
+                    try
+                    {
+                        _window.BeginInvoke((MethodInvoker)delegate
+                        {
+                            UpdateMute(micMuted);
+                        });
+                    }
+                    catch (InvalidOperationException) { }
+                }
+            }, null, 2000, Timeout.Infinite);
+        }
+
+        private static bool CheckOscQuery()
+        {
+            List<int> ports = GetVrcTcpPorts();
+            if (ports.Count == 0) return false;
+            foreach (int port in ports)
+            {
+                if (TryOscQueryProbe(port)) return true;
+            }
+            return false;
+        }
+
+        private static bool TryOscQueryProbe(int port)
+        {
+            using (var client = new TcpClient())
+            {
+                var ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(300)) return false;
+                client.EndConnect(ar);
+                var stream = client.GetStream();
+                stream.ReadTimeout = 500;
+                byte[] req = Encoding.ASCII.GetBytes("GET / HTTP/1.0\r\n\r\n");
+                stream.Write(req, 0, req.Length);
+                byte[] buf = new byte[512];
+                int n = stream.Read(buf, 0, buf.Length);
+                string resp = Encoding.ASCII.GetString(buf, 0, n);
+                return resp.IndexOf("FULL_PATH") >= 0 || resp.IndexOf("full_path") >= 0;
+            }
+        }
+
+        private static bool QueryMicState()
+        {
+            List<int> ports = GetVrcTcpPorts();
+            if (ports.Count == 0) return true;
+            int port = ports[0];
+            using (var client = new TcpClient())
+            {
+                try
+                {
+                    var ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
+                    if (!ar.AsyncWaitHandle.WaitOne(300)) return true;
+                    client.EndConnect(ar);
+                    var stream = client.GetStream();
+                    stream.ReadTimeout = 500;
+                    byte[] req = Encoding.ASCII.GetBytes("GET /input/Voice HTTP/1.0\r\n\r\n");
+                    stream.Write(req, 0, req.Length);
+                    byte[] buf = new byte[512];
+                    int n = stream.Read(buf, 0, buf.Length);
+                    string resp = Encoding.ASCII.GetString(buf, 0, n);
+                    int valIdx = resp.IndexOf("\"VALUE\"");
+                    if (valIdx < 0) return true;
+                    string valPart = resp.Substring(valIdx);
+                    return valPart.IndexOf("[false]") >= 0;
+                }
+                catch (Exception) { return true; }
+            }
+        }
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, int ulReserved);
+
+        private const int TCP_TABLE_OWNER_PID_LISTEN = 3;
+        private const int AF_INET = 2;
+
+        private static List<int> GetVrcTcpPorts()
+        {
+            List<int> ports = new List<int>();
+            HashSet<int> vrcPids = new HashSet<int>();
+            try { foreach (Process p in Process.GetProcessesByName("VRChat")) { try { vrcPids.Add(p.Id); } catch (Exception) { } } } catch (Exception) { }
+            if (vrcPids.Count == 0) return ports;
+            int size = 0;
+            uint ret = GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
+            if (ret != 0 && ret != 122) return ports;
+            IntPtr table = IntPtr.Zero;
+            try
+            {
+                table = Marshal.AllocHGlobal(size);
+                ret = GetExtendedTcpTable(table, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
+                if (ret != 0) return ports;
+                int count = Marshal.ReadInt32(table);
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr entry = new IntPtr(table.ToInt64() + 4 + i * 24);
+                    int localPort = (Marshal.ReadByte(entry, 8) << 8) | Marshal.ReadByte(entry, 9);
+                    int ownerPid = Marshal.ReadInt32(entry, 20);
+                    if (vrcPids.Contains(ownerPid)) ports.Add(localPort);
+                }
+            }
+            catch (Exception) { }
+            finally { if (table != IntPtr.Zero) Marshal.FreeHGlobal(table); }
+            return ports;
         }
 
         protected override void Dispose(bool disposing)
@@ -183,26 +315,13 @@ namespace VRCMicToggle
             ContextMenuStrip menu = new ContextMenuStrip();
 
             _statusItem = new ToolStripMenuItem();
-            _statusItem.Enabled = false;
+            _statusItem.Click += (s, e) => OnHotkeyPressed();
 
             ToolStripMenuItem setHk = new ToolStripMenuItem("设置快捷键...");
             setHk.Click += (s, e) => SetHotkeyDialog();
 
             ToolStripMenuItem setColor = new ToolStripMenuItem("颜色设置...");
             setColor.Click += (s, e) => OpenColorSettings();
-
-            ToolStripMenuItem toggle = new ToolStripMenuItem("立即切换麦克风");
-            toggle.Click += (s, e) => OnHotkeyPressed();
-
-            _trackItem = new ToolStripMenuItem("显示麦克风状态");
-            _trackItem.CheckOnClick = true;
-            _trackItem.Checked = _config.TrackStatus;
-            _trackItem.CheckedChanged += (s, e) =>
-            {
-                _config.TrackStatus = _trackItem.Checked;
-                _config.Save();
-                if (_trackItem.Checked) StartListener(); else StopListener();
-            };
 
             _startupItem = new ToolStripMenuItem("开机自启");
             _startupItem.CheckOnClick = true;
@@ -222,8 +341,8 @@ namespace VRCMicToggle
 
             menu.Items.AddRange(new ToolStripItem[] {
                 _statusItem, new ToolStripSeparator(),
-                setHk, setColor, toggle, new ToolStripSeparator(),
-                _trackItem, _startupItem, new ToolStripSeparator(),
+                setHk, setColor, new ToolStripSeparator(),
+                _startupItem, new ToolStripSeparator(),
                 about, exit
             });
             return menu;
@@ -338,11 +457,6 @@ namespace VRCMicToggle
                 }, null, OscToggleDelayMs, Timeout.Infinite);
                 lock (_pendingTimers) { _pendingTimers.Add(offTimer); }
             }
-            if (!_config.TrackStatus)
-            {
-                bool currentMuted = _muted.HasValue ? _muted.Value : false;
-                UpdateMute(!currentMuted);
-            }
         }
 
         private static byte[] OscEncode(string address, int value)
@@ -395,7 +509,6 @@ namespace VRCMicToggle
                         _activeListenPort = port;
                     }
                     client.BeginReceive(ListenerReceive, null);
-                    if (_trackItem != null) _trackItem.Text = "显示麦克风状态（监听 " + port + "）";
                     UpdateStatusText();
                     return;
                 }
@@ -422,7 +535,6 @@ namespace VRCMicToggle
             }
             try { if (toClose != null) toClose.Close(); } catch (ObjectDisposedException) { }
             _muted = null;
-            if (_trackItem != null) _trackItem.Text = "显示麦克风状态";
             SetIcon(IconState.Unknown);
             UpdateStatusText();
         }
@@ -462,7 +574,6 @@ namespace VRCMicToggle
                         {
                             _window.BeginInvoke((MethodInvoker)delegate
                             {
-                                if (_trackItem != null) _trackItem.Text = "显示麦克风状态";
                                 SetIcon(IconState.Unknown);
                                 UpdateStatusText();
                                 ShowTip("监听器意外停止，可在菜单中重新勾选\"显示麦克风状态\"以恢复。");
@@ -855,7 +966,6 @@ namespace VRCMicToggle
     {
         public uint HotkeyMods = 0;
         public uint HotkeyKey = (uint)Keys.Insert;
-        public bool TrackStatus = false;
         public bool RunOnStartup = false;
         public string UnknownColor = "#888888";
         public string MutedColor = "#F48FB1";
@@ -894,7 +1004,6 @@ namespace VRCMicToggle
                         {
                             case "HotkeyMods": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyMods); break;
                             case "HotkeyKey": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyKey); break;
-                            case "TrackStatus": bool.TryParse(v, out c.TrackStatus); break;
                             case "RunOnStartup": bool.TryParse(v, out c.RunOnStartup); break;
                             case "UnknownColor": c.UnknownColor = v; break;
                             case "MutedColor": c.MutedColor = v; break;
@@ -922,7 +1031,6 @@ namespace VRCMicToggle
                 File.WriteAllText(FilePath,
                     "HotkeyMods=" + HotkeyMods.ToString(CultureInfo.InvariantCulture) + "\r\n" +
                     "HotkeyKey=" + HotkeyKey.ToString(CultureInfo.InvariantCulture) + "\r\n" +
-                    "TrackStatus=" + TrackStatus + "\r\n" +
                     "RunOnStartup=" + RunOnStartup + "\r\n" +
                     "UnknownColor=" + UnknownColor + "\r\n" +
                     "MutedColor=" + MutedColor + "\r\n" +

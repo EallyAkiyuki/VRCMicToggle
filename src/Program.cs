@@ -91,6 +91,10 @@ namespace VRCMicToggle
         private bool? _muted;
         private Config _config;
         private bool _disposed;
+        private System.Threading.Timer _oscPollTimer;
+        private int _oscNoResponseCount;
+        private bool _firstPoll = true;
+        private int _pollBusy;
 
         private Icon _cachedUnknown;
         private Icon _cachedMuted;
@@ -136,45 +140,68 @@ namespace VRCMicToggle
 
             ShowTip("VRC 麦克风切换已启动。快捷键：" + _cachedHotkeyDisplay);
 
-            System.Threading.Timer oscCheckTimer = null;
-            oscCheckTimer = new System.Threading.Timer(_ =>
+            _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, 5000);
+            lock (_pendingTimers) { _pendingTimers.Add(_oscPollTimer); }
+        }
+
+        // 每 5 秒主动检测一次 OSC / 麦克风状态：
+        // - 只有首次启动的那一次轮询才尝试弹窗（且需检测到 VRChat 进程），
+        //   之后的轮询只更新状态，绝不弹窗；
+        // - VRChat 连续两次未响应，则把图标更新为灰色（未知状态）。
+        private void PollOscState()
+        {
+            if (_disposed) return;
+            if (Interlocked.CompareExchange(ref _pollBusy, 1, 0) != 0) return;
+            bool firstPoll = _firstPoll;
+            _firstPoll = false;
+            try
             {
-                oscCheckTimer.Dispose();
                 bool oscActive = CheckOscQuery();
-                if (!oscActive)
+                if (oscActive)
                 {
-                    bool vrcRunning = false;
-                    try { Process[] procs = Process.GetProcessesByName("VRChat"); vrcRunning = procs.Length > 0; } catch (Exception) { }
-                    try
+                    bool? mic = QueryMicState();
+                    if (mic.HasValue)
                     {
-                        _window.BeginInvoke((MethodInvoker)delegate
+                        _oscNoResponseCount = 0;
+                        bool m = mic.Value;
+                        try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                        return;
+                    }
+                }
+
+                // 未连接 / VRChat 未响应
+                bool vrcRunning = false;
+                try { Process[] procs = Process.GetProcessesByName("VRChat"); vrcRunning = procs.Length > 0; } catch (Exception) { }
+
+                _oscNoResponseCount++;
+                int noResp = _oscNoResponseCount;
+                try
+                {
+                    _window.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (firstPoll && vrcRunning)
                         {
-                            string reason = !vrcRunning
-                                ? "未检测到 VRChat 进程，可能是 VRChat 未启动。"
-                                : "已检测到 VRChat 进程，但 OSC 未开启。";
                             MessageBox.Show(
-                                "VRCMicTool 未连接到 OSC\n\n" + reason + "\n\n" +
+                                "VRChat已启动 但OSC未开启或VRC未响应\n\n" +
                                 "请确保：\n" +
                                 "1. VRChat 已启动\n" +
                                 "2. 在 VRChat 动作菜单中开启 OSC（Osc > Enabled）",
                                 "OSC 未连接", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        });
-                    }
-                    catch (InvalidOperationException) { }
-                }
-                else
-                {
-                    bool micMuted = QueryMicState();
-                    try
-                    {
-                        _window.BeginInvoke((MethodInvoker)delegate
+                        }
+                        if (noResp >= 2)
                         {
-                            UpdateMute(micMuted);
-                        });
-                    }
-                    catch (InvalidOperationException) { }
+                            _muted = null;
+                            SetIcon(IconState.Unknown);
+                            UpdateStatusText();
+                        }
+                    });
                 }
-            }, null, 2000, Timeout.Infinite);
+                catch (InvalidOperationException) { }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _pollBusy, 0);
+            }
         }
 
         private static bool CheckOscQuery()
@@ -206,17 +233,18 @@ namespace VRCMicToggle
             }
         }
 
-        private static bool QueryMicState()
+        // 返回值：true=已静音，false=已开麦，null=VRChat 未响应
+        private static bool? QueryMicState()
         {
             List<int> ports = GetVrcTcpPorts();
-            if (ports.Count == 0) return true;
+            if (ports.Count == 0) return null;
             int port = ports[0];
             using (var client = new TcpClient())
             {
                 try
                 {
                     var ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
-                    if (!ar.AsyncWaitHandle.WaitOne(300)) return true;
+                    if (!ar.AsyncWaitHandle.WaitOne(300)) return null;
                     client.EndConnect(ar);
                     var stream = client.GetStream();
                     stream.ReadTimeout = 500;
@@ -226,11 +254,11 @@ namespace VRCMicToggle
                     int n = stream.Read(buf, 0, buf.Length);
                     string resp = Encoding.ASCII.GetString(buf, 0, n);
                     int valIdx = resp.IndexOf("\"VALUE\"");
-                    if (valIdx < 0) return true;
+                    if (valIdx < 0) return null;
                     string valPart = resp.Substring(valIdx);
                     return valPart.IndexOf("[false]") >= 0;
                 }
-                catch (Exception) { return true; }
+                catch (Exception) { return null; }
             }
         }
 

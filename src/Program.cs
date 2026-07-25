@@ -77,6 +77,8 @@ namespace VRCMicToggle
         private const int IconBaseSize = 24;
         private const float IconScaleFactor = 1.375f;
         private const int ParseMaxDepth = 8;
+        private const int OscPollIntervalMs = 3000;
+        private const int OscPostToggleDelayMs = 600;
 
         private NotifyIcon _notify;
         private ToolStripMenuItem _statusItem;
@@ -95,6 +97,7 @@ namespace VRCMicToggle
         private int _oscNoResponseCount;
         private bool _firstPoll = true;
         private int _pollBusy;
+        private int _cachedOscQueryPort;
 
         private Icon _cachedUnknown;
         private Icon _cachedMuted;
@@ -140,14 +143,16 @@ namespace VRCMicToggle
 
             ShowTip("VRC 麦克风切换已启动。快捷键：" + _cachedHotkeyDisplay);
 
-            _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, 5000);
+            _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, OscPollIntervalMs);
             lock (_pendingTimers) { _pendingTimers.Add(_oscPollTimer); }
         }
 
-        // 每 5 秒主动检测一次 OSC / 麦克风状态：
+        // 每 3 秒主动检测一次 OSC / 麦克风状态：
         // - 只有首次启动的那一次轮询才尝试弹窗（且需检测到 VRChat 进程），
         //   之后的轮询只更新状态，绝不弹窗；
-        // - VRChat 连续两次未响应，则把图标更新为灰色（未知状态）。
+        // - VRChat 连续两次未响应，则把图标更新为灰色（未知状态）；
+        // - 使用单次 TCP 连接同时完成 OSCQuery 探测和麦克风状态查询，
+        //   并缓存已发现的 OSCQuery 端口，避免每次轮询都重新探测。
         private void PollOscState()
         {
             if (_disposed) return;
@@ -156,22 +161,18 @@ namespace VRCMicToggle
             _firstPoll = false;
             try
             {
-                bool oscActive = CheckOscQuery();
-                if (oscActive)
+                bool? mic = QueryMicStateUnified();
+                if (mic.HasValue)
                 {
-                    bool? mic = QueryMicState();
-                    if (mic.HasValue)
-                    {
-                        _oscNoResponseCount = 0;
-                        bool m = mic.Value;
-                        try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
-                        return;
-                    }
+                    _oscNoResponseCount = 0;
+                    bool m = mic.Value;
+                    try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                    return;
                 }
 
-                // 未连接 / VRChat 未响应
+                // 未能读取麦克风状态（VRChat 未响应或 OSCQuery 不可用）
                 bool vrcRunning = false;
-                try { Process[] procs = Process.GetProcessesByName("VRChat"); vrcRunning = procs.Length > 0; } catch (Exception) { }
+                try { Process[] procs = Process.GetProcessesByName("VRChat"); try { vrcRunning = procs.Length > 0; } finally { for (int pi = 0; pi < procs.Length; pi++) procs[pi].Dispose(); } } catch (Exception) { }
 
                 _oscNoResponseCount++;
                 int noResp = _oscNoResponseCount;
@@ -198,67 +199,113 @@ namespace VRCMicToggle
                 }
                 catch (InvalidOperationException) { }
             }
+            catch (Exception ex)
+            {
+                AppLogger.Log("PollOscState", ex);
+            }
             finally
             {
                 Interlocked.Exchange(ref _pollBusy, 0);
             }
         }
 
-        private static bool CheckOscQuery()
+        // 统一的麦克风状态查询：
+        // 优先使用缓存的 OSCQuery 端口直接查询 /input/Voice，
+        // 如果缓存端口失败则清除缓存，枚举 VRChat 所有 TCP 监听端口逐一尝试。
+        // 找到有效响应后缓存该端口供后续轮询使用。
+        private bool? QueryMicStateUnified()
         {
-            List<int> ports = GetVrcTcpPorts();
-            if (ports.Count == 0) return false;
-            foreach (int port in ports)
+            int cached = _cachedOscQueryPort;
+            if (cached > 0)
             {
-                if (TryOscQueryProbe(port)) return true;
+                bool? result = TryQueryMicOnPort(cached);
+                if (result.HasValue) return result;
+                // 缓存端口已失效，清除
+                _cachedOscQueryPort = 0;
             }
-            return false;
-        }
 
-        private static bool TryOscQueryProbe(int port)
-        {
-            using (var client = new TcpClient())
-            {
-                var ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
-                if (!ar.AsyncWaitHandle.WaitOne(300)) return false;
-                client.EndConnect(ar);
-                var stream = client.GetStream();
-                stream.ReadTimeout = 500;
-                byte[] req = Encoding.ASCII.GetBytes("GET / HTTP/1.0\r\n\r\n");
-                stream.Write(req, 0, req.Length);
-                byte[] buf = new byte[512];
-                int n = stream.Read(buf, 0, buf.Length);
-                string resp = Encoding.ASCII.GetString(buf, 0, n);
-                return resp.IndexOf("FULL_PATH") >= 0 || resp.IndexOf("full_path") >= 0;
-            }
-        }
-
-        // 返回值：true=已静音，false=已开麦，null=VRChat 未响应
-        private static bool? QueryMicState()
-        {
             List<int> ports = GetVrcTcpPorts();
             if (ports.Count == 0) return null;
-            int port = ports[0];
-            using (var client = new TcpClient())
+            foreach (int port in ports)
             {
-                try
+                if (port == cached) continue; // 已经尝试过
+                bool? result = TryQueryMicOnPort(port);
+                if (result.HasValue)
                 {
-                    var ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
-                    if (!ar.AsyncWaitHandle.WaitOne(300)) return null;
-                    client.EndConnect(ar);
-                    var stream = client.GetStream();
-                    stream.ReadTimeout = 500;
-                    byte[] req = Encoding.ASCII.GetBytes("GET /input/Voice HTTP/1.0\r\n\r\n");
-                    stream.Write(req, 0, req.Length);
-                    byte[] buf = new byte[512];
-                    int n = stream.Read(buf, 0, buf.Length);
-                    string resp = Encoding.ASCII.GetString(buf, 0, n);
-                    int valIdx = resp.IndexOf("\"VALUE\"");
-                    if (valIdx < 0) return null;
-                    string valPart = resp.Substring(valIdx);
-                    return valPart.IndexOf("[false]") >= 0;
+                    _cachedOscQueryPort = port; // 缓存有效端口
+                    return result;
                 }
-                catch (Exception) { return null; }
+            }
+            return null;
+        }
+
+        // 通过单次 TCP 连接查询 VRChat OSCQuery 服务器的 /input/Voice 状态。
+        // 同时承担 OSCQuery 探测职责：如果响应中包含 "VALUE" 则认为是有效的 OSCQuery 服务器。
+        // 返回：true=已静音，false=已开麦，null=该端口非 OSCQuery 或连接失败。
+        private static bool? TryQueryMicOnPort(int port)
+        {
+            TcpClient client = null;
+            try
+            {
+                client = new TcpClient();
+                IAsyncResult ar = client.BeginConnect(IPAddress.Loopback, port, null, null);
+                bool connected = ar.AsyncWaitHandle.WaitOne(400, true);
+                if (!connected)
+                {
+                    // 连接超时，必须显式关闭以避免异步连接泄漏
+                    try { client.Close(); } catch (Exception) { }
+                    return null;
+                }
+                client.EndConnect(ar);
+                NetworkStream stream = client.GetStream();
+                stream.ReadTimeout = 600;
+                stream.WriteTimeout = 400;
+                byte[] req = Encoding.ASCII.GetBytes("GET /input/Voice HTTP/1.0\r\n\r\n");
+                stream.Write(req, 0, req.Length);
+                stream.Flush();
+
+                // 读取响应（可能分多个 TCP 段到达）
+                byte[] buf = new byte[1024];
+                int totalRead = 0;
+                while (totalRead < buf.Length)
+                {
+                    int n = stream.Read(buf, totalRead, buf.Length - totalRead);
+                    if (n <= 0) break;
+                    totalRead += n;
+                    // 如果已经收到足够的数据来判断，可以提前退出
+                    string partial = Encoding.ASCII.GetString(buf, 0, totalRead);
+                    if (partial.IndexOf("\r\n\r\n") >= 0 &&
+                        (partial.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         partial.IndexOf("value", StringComparison.OrdinalIgnoreCase) >= 0))
+                        break;
+                }
+                if (totalRead == 0) return null;
+                string resp = Encoding.ASCII.GetString(buf, 0, totalRead);
+
+                // 如果响应不包含 VALUE，说明这不是 OSCQuery 服务器
+                int valIdx = resp.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase);
+                if (valIdx < 0) return null;
+
+                string valPart = resp.Substring(valIdx);
+                // OSCQuery 的 VALUE 可能是数组格式 [true]/[false]，也可能是裸值 true/false
+                if (valPart.IndexOf("[false]", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    (valPart.IndexOf(": false", StringComparison.OrdinalIgnoreCase) >= 0 && valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) < 0 && valPart.IndexOf(": true", StringComparison.OrdinalIgnoreCase) < 0))
+                    return true;   // 已静音
+                if (valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    valPart.IndexOf(": true", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;  // 已开麦
+                return null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+            finally
+            {
+                if (client != null)
+                {
+                    try { client.Close(); } catch (Exception) { }
+                }
             }
         }
 
@@ -272,7 +319,7 @@ namespace VRCMicToggle
         {
             List<int> ports = new List<int>();
             HashSet<int> vrcPids = new HashSet<int>();
-            try { foreach (Process p in Process.GetProcessesByName("VRChat")) { try { vrcPids.Add(p.Id); } catch (Exception) { } } } catch (Exception) { }
+            try { Process[] procs = Process.GetProcessesByName("VRChat"); try { foreach (Process p in procs) { try { vrcPids.Add(p.Id); } catch (Exception) { } } } finally { for (int pi = 0; pi < procs.Length; pi++) procs[pi].Dispose(); } } catch (Exception) { }
             if (vrcPids.Count == 0) return ports;
             int size = 0;
             uint ret = GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
@@ -485,6 +532,36 @@ namespace VRCMicToggle
                 }, null, OscToggleDelayMs, Timeout.Infinite);
                 lock (_pendingTimers) { _pendingTimers.Add(offTimer); }
             }
+
+            // 快捷键切换后，延迟主动查询一次麦克风状态以立即更新图标。
+            // 因为 UDP 推送可能无法到达（VRC 默认 OSC 输出端口是 9000，而本程序监听 9001），
+            // 所以需要在切换后主动轮询来同步状态。
+            System.Threading.Timer syncTimer = null;
+            syncTimer = new System.Threading.Timer(_ =>
+            {
+                try
+                {
+                    if (!_disposed)
+                    {
+                        bool? mic = QueryMicStateUnified();
+                        if (mic.HasValue)
+                        {
+                            bool m = mic.Value;
+                            try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Log("PostToggleSync", ex);
+                }
+                finally
+                {
+                    lock (_pendingTimers) { _pendingTimers.Remove(syncTimer); }
+                    syncTimer.Dispose();
+                }
+            }, null, OscPostToggleDelayMs, Timeout.Infinite);
+            lock (_pendingTimers) { _pendingTimers.Add(syncTimer); }
         }
 
         private static byte[] OscEncode(string address, int value)
@@ -972,7 +1049,9 @@ namespace VRCMicToggle
                         (!string.IsNullOrEmpty(modText) ? ("\n当前：" + modText) : "");
                     return;
                 }
-                if (e.Modifiers == Keys.None)
+                // 检测 Win 键（Win 键不被 .NET 的 e.Modifiers 识别，需通过 GetAsyncKeyState 检测）
+                bool winHeld = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+                if (e.Modifiers == Keys.None && !winHeld)
                 {
                     _label.Text = "请至少包含一个修饰键（Ctrl/Alt/Shift/Win）\n\n单独按 Esc 可取消";
                     return;
@@ -981,7 +1060,7 @@ namespace VRCMicToggle
                 if ((e.Modifiers & Keys.Shift) == Keys.Shift) mods |= MOD_SHIFT;
                 if ((e.Modifiers & Keys.Control) == Keys.Control) mods |= MOD_CONTROL;
                 if ((e.Modifiers & Keys.Alt) == Keys.Alt) mods |= MOD_ALT;
-                if ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0) mods |= MOD_WIN;
+                if (winHeld) mods |= MOD_WIN;
                 Key = (uint)e.KeyCode;
                 Modifiers = mods;
                 DialogResult = DialogResult.OK;

@@ -354,9 +354,20 @@ namespace VRCMicToggle
                 }
                 _ownedFonts.Clear();
 
-                Image[] imgs = { _iconUnknown != null ? _iconUnknown.Image : null,
-                                  _iconMuted != null ? _iconMuted.Image : null,
-                                  _iconUnmuted != null ? _iconUnmuted.Image : null };
+                // BUGFIX(B4): Detach Image references from PictureBoxes BEFORE
+                // disposing the images. Otherwise base.Dispose will dispose the
+                // PictureBox controls, which dispose their Image a second time
+                // → double-dispose on GDI+ objects.
+                PictureBox[] boxes = { _iconUnknown, _iconMuted, _iconUnmuted };
+                Image[] imgs = new Image[boxes.Length];
+                for (int i = 0; i < boxes.Length; i++)
+                {
+                    if (boxes[i] != null)
+                    {
+                        imgs[i] = boxes[i].Image;
+                        boxes[i].Image = null;
+                    }
+                }
                 for (int i = 0; i < imgs.Length; i++)
                 {
                     try { if (imgs[i] != null) imgs[i].Dispose(); } catch (Exception) { }

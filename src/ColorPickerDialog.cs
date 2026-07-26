@@ -67,6 +67,11 @@ namespace VRCMicToggle
             _uiFontSmall = new Font("Segoe UI", 8f);
             _consFont = new Font("Consolas", 10f);
             _consFontSmall = new Font("Consolas", 9.5f);
+            // BUGFIX(B5): Pre-create the preview label font in the constructor
+            // instead of lazily inside PreviewPaint. Avoids the risk of the
+            // Font being created on a paint callback and being easy to miss in
+            // the Dispose path.
+            _previewFont = new Font("Segoe UI", 7.5f);
 
             _darkMode = darkMode;
             ApplyTheme();
@@ -451,7 +456,7 @@ namespace VRCMicToggle
                 e.Graphics.DrawLine(pen, half, 0, half, _previewPanel.Height - 1);
             }
 
-            if (_previewFont == null) _previewFont = new Font("Segoe UI", 7.5f);
+            if (_previewFont == null) return; // defensive; should always be pre-created
             using (var br = new SolidBrush(TextColorFor(current)))
                 e.Graphics.DrawString("当前", _previewFont, br, 6, 36);
             using (var br = new SolidBrush(TextColorFor(initial)))

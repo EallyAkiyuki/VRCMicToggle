@@ -735,9 +735,24 @@ namespace VRCMicToggle
                 _activeListenPort = 0;
             }
             try { if (toClose != null) toClose.Close(); } catch (ObjectDisposedException) { }
+            // BUGFIX(B3): StopListener may be called from a non-UI thread
+            // (e.g. future background cleanup paths). Marshal the UI state
+            // reset via BeginInvoke so it is always safe.
             _muted = null;
-            SetIcon(IconState.Unknown);
-            UpdateStatusText();
+            MethodInvoker uiUpdate = delegate
+            {
+                SetIcon(IconState.Unknown);
+                UpdateStatusText();
+            };
+            if (_window != null && !_window.IsDisposed && _window.IsHandleCreated)
+            {
+                try { _window.BeginInvoke(uiUpdate); }
+                catch (InvalidOperationException) { uiUpdate(); }
+            }
+            else
+            {
+                uiUpdate();
+            }
             AppLogger.Info("UDP listener stopped");
         }
 
@@ -774,10 +789,14 @@ namespace VRCMicToggle
                     {
                         AppLogger.Warn("ListenerReceive: failed to requeue, listener stopped");
                         lock (_listenerLock) { _tracking = false; _listener = null; _activeListenPort = 0; }
+                        // BUGFIX(B2): BeginReceive callback runs on ThreadPool; marshal UI
+                        // updates back to the UI thread via BeginInvoke to avoid cross-thread
+                        // access to WinForms controls.
                         try
                         {
                             _window.BeginInvoke((MethodInvoker)delegate
                             {
+                                _muted = null;
                                 SetIcon(IconState.Unknown);
                                 UpdateStatusText();
                             });
@@ -936,39 +955,61 @@ namespace VRCMicToggle
             IntPtr hOldUnknown = _hUnknown;
             IntPtr hOldMuted = _hMuted;
             IntPtr hOldUnmuted = _hUnmuted;
-            _cachedUnknown = null;
-            _cachedMuted = null;
-            _cachedUnmuted = null;
-            _hUnknown = IntPtr.Zero;
-            _hMuted = IntPtr.Zero;
-            _hUnmuted = IntPtr.Zero;
 
-            Color unknownCol = ColorUtil.HexToColor(_config.UnknownColor);
-            Color mutedCol = ColorUtil.HexToColor(_config.MutedColor);
-            Color unmutedCol = ColorUtil.HexToColor(_config.UnmutedColor);
-            Color slashCol = ColorUtil.HexToColor(_config.SlashColor);
+            // Use locals so we can atomically swap them in only after all three
+            // icons are successfully built. If anything throws mid-way we must
+            // release any Bitmaps / HICONs we already created to avoid GDI leaks.
+            Icon newUnknown = null, newMuted = null, newUnmuted = null;
+            IntPtr hNewUnknown = IntPtr.Zero, hNewMuted = IntPtr.Zero, hNewUnmuted = IntPtr.Zero;
+            try
+            {
+                Color unknownCol = ColorUtil.HexToColor(_config.UnknownColor);
+                Color mutedCol = ColorUtil.HexToColor(_config.MutedColor);
+                Color unmutedCol = ColorUtil.HexToColor(_config.UnmutedColor);
+                Color slashCol = ColorUtil.HexToColor(_config.SlashColor);
 
-            Bitmap bmp;
-            bmp = CreateMicIcon(unknownCol, slashCol, false);
-            _hUnknown = bmp.GetHicon();
-            _cachedUnknown = Icon.FromHandle(_hUnknown);
-            bmp.Dispose();
+                Bitmap bmp;
+                bmp = CreateMicIcon(unknownCol, slashCol, false);
+                hNewUnknown = bmp.GetHicon();
+                newUnknown = Icon.FromHandle(hNewUnknown);
+                bmp.Dispose();
 
-            bmp = CreateMicIcon(mutedCol, slashCol, true);
-            _hMuted = bmp.GetHicon();
-            _cachedMuted = Icon.FromHandle(_hMuted);
-            bmp.Dispose();
+                bmp = CreateMicIcon(mutedCol, slashCol, true);
+                hNewMuted = bmp.GetHicon();
+                newMuted = Icon.FromHandle(hNewMuted);
+                bmp.Dispose();
 
-            bmp = CreateMicIcon(unmutedCol, slashCol, false);
-            _hUnmuted = bmp.GetHicon();
-            _cachedUnmuted = Icon.FromHandle(_hUnmuted);
-            bmp.Dispose();
+                bmp = CreateMicIcon(unmutedCol, slashCol, false);
+                hNewUnmuted = bmp.GetHicon();
+                newUnmuted = Icon.FromHandle(hNewUnmuted);
+                bmp.Dispose();
 
-            IconState st = IconState.Unknown;
-            if (_muted.HasValue) st = _muted.Value ? IconState.Muted : IconState.Unmuted;
-            _currentIconState = (IconState)(-1);
-            SetIcon(st);
+                // All three succeeded — atomic swap.
+                _cachedUnknown = newUnknown;
+                _cachedMuted = newMuted;
+                _cachedUnmuted = newUnmuted;
+                _hUnknown = hNewUnknown;
+                _hMuted = hNewMuted;
+                _hUnmuted = hNewUnmuted;
 
+                IconState st = IconState.Unknown;
+                if (_muted.HasValue) st = _muted.Value ? IconState.Muted : IconState.Unmuted;
+                _currentIconState = (IconState)(-1);
+                SetIcon(st);
+            }
+            catch
+            {
+                // Roll back any partially-created resources to avoid GDI leaks.
+                if (newUnknown != null) { try { newUnknown.Dispose(); } catch (InvalidOperationException) { } }
+                if (newMuted != null) { try { newMuted.Dispose(); } catch (InvalidOperationException) { } }
+                if (newUnmuted != null) { try { newUnmuted.Dispose(); } catch (InvalidOperationException) { } }
+                if (hNewUnknown != IntPtr.Zero) DestroyIcon(hNewUnknown);
+                if (hNewMuted != IntPtr.Zero) DestroyIcon(hNewMuted);
+                if (hNewUnmuted != IntPtr.Zero) DestroyIcon(hNewUnmuted);
+                throw;
+            }
+
+            // Dispose the OLD handles/icons only after the new ones are in place.
             if (oldUnknown != null) { try { oldUnknown.Dispose(); } catch (InvalidOperationException) { } }
             if (oldMuted != null) { try { oldMuted.Dispose(); } catch (InvalidOperationException) { } }
             if (oldUnmuted != null) { try { oldUnmuted.Dispose(); } catch (InvalidOperationException) { } }
@@ -1421,14 +1462,31 @@ namespace VRCMicToggle
             {
                 string d = Dir;
                 if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-                File.WriteAllText(FilePath,
+
+                string content =
                     "HotkeyMods=" + HotkeyMods.ToString(CultureInfo.InvariantCulture) + "\r\n" +
                     "HotkeyKey=" + HotkeyKey.ToString(CultureInfo.InvariantCulture) + "\r\n" +
                     "RunOnStartup=" + RunOnStartup + "\r\n" +
                     "UnknownColor=" + UnknownColor + "\r\n" +
                     "MutedColor=" + MutedColor + "\r\n" +
                     "UnmutedColor=" + UnmutedColor + "\r\n" +
-                    "SlashColor=" + SlashColor + "\r\n");
+                    "SlashColor=" + SlashColor + "\r\n";
+
+                // BUGFIX(B6): Write to a temp file first and atomically replace
+                // the target. Without this, a crash during File.WriteAllText
+                // could leave config.txt truncated, losing user settings.
+                string tmp = FilePath + ".tmp";
+                File.WriteAllText(tmp, content);
+                if (File.Exists(FilePath))
+                {
+                    string bak = FilePath + ".bak";
+                    if (File.Exists(bak)) File.Delete(bak);
+                    File.Replace(tmp, FilePath, bak);
+                }
+                else
+                {
+                    File.Move(tmp, FilePath);
+                }
                 AppLogger.Debug("Config.Save: saved successfully");
             }
             catch (IOException ex) { AppLogger.Log("Config.Save", ex); }
@@ -1459,26 +1517,60 @@ namespace VRCMicToggle
 
         public static void Info(string msg)
         {
-            WriteLog(DebugLogPath, "INFO", msg);
-        }
-
-        public static void Warn(string msg)
-        {
-            WriteLog(DebugLogPath, "WARN", msg);
-        }
-
-        public static void Log(string context, Exception ex)
-        {
-            WriteLog(DebugLogPath, "ERROR", "[" + context + "] " + ex.ToString());
+            // BUGFIX(B7): Operational messages always go to error.log so they
+            // are preserved in Release builds. Only mirror to debug.log under
+            // DEBUG where that file is actively being tailed by developers.
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                + " [INFO] " + msg + Environment.NewLine;
             try
             {
                 string dir = Path.GetDirectoryName(LogPath);
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(LogPath,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) +
-                    " [" + context + "] " + ex.ToString() + Environment.NewLine);
+                File.AppendAllText(LogPath, line);
             }
             catch (Exception) { }
+#if DEBUG
+            try { File.AppendAllText(DebugLogPath, line); } catch (Exception) { }
+#endif
+        }
+
+        public static void Warn(string msg)
+        {
+            // See Info() above for the rationale.
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                + " [WARN] " + msg + Environment.NewLine;
+            try
+            {
+                string dir = Path.GetDirectoryName(LogPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.AppendAllText(LogPath, line);
+            }
+            catch (Exception) { }
+#if DEBUG
+            try { File.AppendAllText(DebugLogPath, line); } catch (Exception) { }
+#endif
+        }
+
+        public static void Log(string context, Exception ex)
+        {
+            string errLine = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                + " [ERROR] [" + context + "] " + ex.ToString() + Environment.NewLine;
+            try
+            {
+                string dir = Path.GetDirectoryName(LogPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.AppendAllText(LogPath, errLine);
+            }
+            catch (Exception) { }
+#if DEBUG
+            try
+            {
+                string dir = Path.GetDirectoryName(DebugLogPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.AppendAllText(DebugLogPath, errLine);
+            }
+            catch (Exception) { }
+#endif
         }
 
         private static void WriteLog(string path, string level, string msg)

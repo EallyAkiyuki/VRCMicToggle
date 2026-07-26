@@ -507,7 +507,8 @@ namespace VRCMicToggle
         private void ShowAboutDialog()
         {
             MessageBox.Show(
-                "VRC 麦克风切换工具\n\n" +
+                "VRC 麦克风切换工具\n" +
+                "Version：" + AppVersion.Version + "\n\n" +
                 "使用全局快捷键 通过OSC切换VRChat麦克风状态\n\n" +
                 "Tips:\n" +
                 "1. 在 VRChat 菜单中打开OSC（圆盘菜单>选项>OSC>开启）。\n" +

@@ -426,6 +426,9 @@ namespace VRCMicToggle
             ContextMenuStrip menu = new ContextMenuStrip();
 
             _statusItem = new ToolStripMenuItem();
+            string state = (_muted.HasValue ? (_muted.Value ? Lang.StateMuted : Lang.StateUnmuted) : Lang.StateUnknown);
+            _statusItem.Text = Lang.StatusPrefix + state;
+            _cachedStatusText = _statusItem.Text;
             _statusItem.Click += (s, e) => OnHotkeyPressed();
 
             ToolStripMenuItem setHk = new ToolStripMenuItem(Lang.MenuHotkeySettings);

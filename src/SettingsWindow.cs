@@ -11,7 +11,6 @@ namespace VRCMicToggle
     internal sealed class SettingsWindow : Form
     {
         private const int Pad = 24;
-        private const int FormWidth = 448;
         private const int BottomPanelHeight = 56;
         private const int ColorCount = 4;
 
@@ -76,6 +75,7 @@ namespace VRCMicToggle
             Padding = new Padding(Pad);
 
             int pad = Pad;
+            int formWidth = 448;
             int y = pad;
 
             Label title = new Label
@@ -174,7 +174,7 @@ namespace VRCMicToggle
             DbPanel bottomPanel = new DbPanel
             {
                 Location = new Point(0, y),
-                Size = new Size(FormWidth, BottomPanelHeight),
+                Size = new Size(formWidth, BottomPanelHeight),
                 BackColor = _darkMode ? Color.FromArgb(38, 38, 38) : Color.FromArgb(242, 242, 242)
             };
             bottomPanel.Paint += (s, e) =>
@@ -188,18 +188,39 @@ namespace VRCMicToggle
             defaultBtn.Location = new Point(pad, 12);
             bottomPanel.Controls.Add(defaultBtn);
 
-            int bx = FormWidth - pad;
-            Button saveBtn = MakeButton(Lang.BtnSave, OnSave, true);
-            saveBtn.Location = new Point(bx - saveBtn.Width, 12);
-            bx -= saveBtn.Width + 8;
-            bottomPanel.Controls.Add(saveBtn);
-
             Button cancelBtn = MakeButton(Lang.BtnCancel, OnCancel, false);
-            cancelBtn.Location = new Point(bx - cancelBtn.Width, 12);
-            bx -= cancelBtn.Width + 8;
-            bottomPanel.Controls.Add(cancelBtn);
+            Button saveBtn = MakeButton(Lang.BtnSave, OnSave, true);
 
-            ClientSize = new Size(FormWidth, y + BottomPanelHeight);
+            // 使用 TextRenderer 测量按钮实际宽度
+            Font btnFont = new Font("Segoe UI", 9.5f);
+            int btnPadding = 28; // 左右各 14px
+            int defaultW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnRestoreDefaults, btnFont).Width + btnPadding);
+            int cancelW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnCancel, btnFont).Width + btnPadding);
+            int saveW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnSave, btnFont).Width + btnPadding);
+
+            // 右对齐布局：保存 → 取消（8px间距）
+            int bx = formWidth - pad;
+            saveBtn.Location = new Point(bx - saveW, 12);
+            int cancelLeft = saveBtn.Left - cancelW - 8;
+            int cancelMin = pad + defaultW + 8;
+
+            // 如果放不下，扩大窗口宽度
+            if (cancelLeft < cancelMin)
+            {
+                int needed = cancelMin + cancelW + 8 + saveW + pad;
+                formWidth = Math.Max(formWidth, needed);
+                bottomPanel.Size = new Size(formWidth, BottomPanelHeight);
+                bx = formWidth - pad;
+                saveBtn.Location = new Point(bx - saveW, 12);
+                cancelLeft = saveBtn.Left - cancelW - 8;
+            }
+            cancelBtn.Location = new Point(cancelLeft, 12);
+
+            bottomPanel.Controls.Add(saveBtn);
+            bottomPanel.Controls.Add(cancelBtn);
+            btnFont.Dispose();
+
+            ClientSize = new Size(formWidth, y + BottomPanelHeight);
         }
 
         // ── 颜色选择 / 预览 / 事件处理 ──────────────────

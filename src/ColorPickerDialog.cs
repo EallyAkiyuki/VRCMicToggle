@@ -124,7 +124,7 @@ namespace VRCMicToggle
             int pad = 20;
             int leftW = SL_SIZE;
             int gap = 20;
-            int rightW = 160;
+            int rightW = 220;
             int totalW = pad + leftW + gap + rightW + pad;
 
             _slPanel = new DbPanel
@@ -208,13 +208,13 @@ namespace VRCMicToggle
                 Text = "RGB",
                 ForeColor = _subFg,
                 Location = new Point(rx, ry + 4),
-                Size = new Size(32, 20)
+                Size = new Size(40, 20)
             };
             Controls.Add(rgbLabel);
 
-            _rInput = MakeRgbInput(rx + 38, ry, "R");
-            _gInput = MakeRgbInput(rx + 80, ry, "G");
-            _bInput = MakeRgbInput(rx + 122, ry, "B");
+            _rInput = MakeRgbInput(rx + 60, ry, "R");
+            _gInput = MakeRgbInput(rx + 116, ry, "G");
+            _bInput = MakeRgbInput(rx + 172, ry, "B");
             ry += 32;
 
             Label presetLabel = new Label
@@ -262,12 +262,31 @@ namespace VRCMicToggle
             Controls.Add(_recentPanel);
             ry += _recentPanel.Height + 18;
 
-            Button okBtn = MakeButton(Lang.BtnOk, OnOk, true);
-            okBtn.Location = new Point(rx + rightW - okBtn.Width, ry);
-            Controls.Add(okBtn);
-
+            Button okBtn = MakeButton(Lang.BtnSave, OnOk, true);
             Button cancelBtn = MakeButton(Lang.BtnCancel, OnCancel, false);
-            cancelBtn.Location = new Point(okBtn.Left - cancelBtn.Width - 8, ry);
+
+            // 使用 TextRenderer 测量按钮实际宽度
+            Font btnFont = new Font("Segoe UI", 9.5f);
+            int btnPadding = 28;
+            int okW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnSave, btnFont).Width + btnPadding);
+            int cancelW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnCancel, btnFont).Width + btnPadding);
+            btnFont.Dispose();
+
+            // 确保右侧面板足够宽以容纳两个按钮（间距 8px，右侧留白 8px）
+            int minRightW = okW + 8 + cancelW + 8;
+            if (rightW < minRightW)
+            {
+                int extra = minRightW - rightW;
+                rightW += extra;
+                totalW += extra;
+            }
+
+            // 右对齐布局：Cancel → OK（8px 间距，OK 右侧留白 8px）
+            okBtn.Location = new Point(rx + rightW - okW - 8, ry);
+            int cancelLeft = okBtn.Left - cancelW - 8;
+            cancelBtn.Location = new Point(cancelLeft, ry);
+
+            Controls.Add(okBtn);
             Controls.Add(cancelBtn);
 
             ry += 46;
@@ -282,8 +301,8 @@ namespace VRCMicToggle
                 Text = label,
                 Font = _uiFontSmall,
                 ForeColor = _subFg,
-                Location = new Point(x - 14, y + 4),
-                Size = new Size(14, 18),
+                Location = new Point(x - 18, y + 4),
+                Size = new Size(16, 18),
                 TextAlign = ContentAlignment.MiddleRight
             };
             Controls.Add(lbl);
@@ -475,7 +494,8 @@ namespace VRCMicToggle
 
         private void PresetPanelPaint(object sender, PaintEventArgs e)
         {
-            PaintSwatches(e.Graphics, _presetColorsParsed);
+            int offsetX = (_presetPanel.Width - SWATCH_COLS * SWATCH_STEP + 4) / 2;
+            PaintSwatches(e.Graphics, _presetColorsParsed, offsetX);
         }
 
         private void RecentPanelPaint(object sender, PaintEventArgs e)
@@ -486,10 +506,12 @@ namespace VRCMicToggle
                     e.Graphics.DrawString(Lang.NoRecentColors, Font, br, 0, 2);
                 return;
             }
-            PaintSwatches(e.Graphics, _recentColorsParsed);
+            int cols = Math.Min(SWATCH_COLS, _recentColors.Count);
+            int offsetX = (_recentPanel.Width - cols * SWATCH_STEP + 4) / 2;
+            PaintSwatches(e.Graphics, _recentColorsParsed, offsetX);
         }
 
-        private void PaintSwatches(Graphics g, Color[] colors)
+        private void PaintSwatches(Graphics g, Color[] colors, int offsetX)
         {
             Color borderClr = _darkMode ? Color.FromArgb(70, 70, 70) : Color.FromArgb(210, 210, 210);
             using (Pen borderPen = new Pen(borderClr))
@@ -498,7 +520,7 @@ namespace VRCMicToggle
                 {
                     int col = i % SWATCH_COLS;
                     int row = i / SWATCH_COLS;
-                    int x = col * SWATCH_STEP;
+                    int x = offsetX + col * SWATCH_STEP;
                     int y = row * SWATCH_STEP;
                     using (var br = new SolidBrush(colors[i]))
                         g.FillRectangle(br, x, y, SWATCH, SWATCH);
@@ -509,7 +531,8 @@ namespace VRCMicToggle
 
         private void PresetPanelMouseDown(object sender, MouseEventArgs e)
         {
-            int idx = SwatchAt(e.Location, PresetColors.Length);
+            int offsetX = (_presetPanel.Width - SWATCH_COLS * SWATCH_STEP + 4) / 2;
+            int idx = SwatchAt(e.Location, PresetColors.Length, offsetX);
             if (idx >= 0)
             {
                 HexToHsv(PresetColors[idx], out _hue, out _saturation, out _value);
@@ -519,7 +542,10 @@ namespace VRCMicToggle
 
         private void RecentPanelMouseDown(object sender, MouseEventArgs e)
         {
-            int idx = SwatchAt(e.Location, _recentColors.Count);
+            if (_recentColors.Count == 0) return;
+            int cols = Math.Min(SWATCH_COLS, _recentColors.Count);
+            int offsetX = (_recentPanel.Width - cols * SWATCH_STEP + 4) / 2;
+            int idx = SwatchAt(e.Location, _recentColors.Count, offsetX);
             if (idx >= 0)
             {
                 HexToHsv(_recentColors[idx], out _hue, out _saturation, out _value);
@@ -527,9 +553,10 @@ namespace VRCMicToggle
             }
         }
 
-        private int SwatchAt(Point p, int count)
+        private int SwatchAt(Point p, int count, int offsetX)
         {
-            int col = p.X / SWATCH_STEP;
+            int adjustedX = p.X - offsetX;
+            int col = adjustedX / SWATCH_STEP;
             int row = p.Y / SWATCH_STEP;
             if (col < 0 || col >= SWATCH_COLS) return -1;
             int idx = row * SWATCH_COLS + col;

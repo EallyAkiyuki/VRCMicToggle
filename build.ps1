@@ -1,7 +1,11 @@
 param(
-    [ValidateSet("Debug", "Release")]
+    [Parameter(Position = 0)]
+    [ValidateSet("Debug", "Release", IgnoreCase = $true)]
     [string]$Configuration = "Release"
 )
+
+# Normalize to PascalCase for consistent output paths
+$Configuration = (Get-Culture).TextInfo.ToTitleCase($Configuration)
 
 $outDir = "bin\$Configuration"
 $out = "$outDir\VRCMic.exe"

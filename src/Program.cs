@@ -521,7 +521,7 @@ namespace VRCMicToggle
         {
             AppLogger.Debug("SetHotkeyDialog: opening hotkey capture dialog");
             UnregisterHotKey(_window.Handle, HOTKEY_ID);
-            using (HotkeyCaptureForm dlg = new HotkeyCaptureForm())
+            using (HotkeyCaptureForm dlg = new HotkeyCaptureForm(_window.Handle))
             {
                 DialogResult r = dlg.ShowDialog(_window);
                 if (r == DialogResult.OK)
@@ -1115,63 +1115,234 @@ namespace VRCMicToggle
         {
             public uint Key;
             public uint Modifiers;
-            private Label _label;
 
-            public HotkeyCaptureForm()
+            private readonly IntPtr _targetHandle;
+            private uint _capturedMods;
+            private Keys _capturedKey;
+            private bool _hasMainKey;
+
+            private Label _comboLabel;
+
+            public HotkeyCaptureForm(IntPtr targetHandle)
+            {
+                _targetHandle = targetHandle;
+                BuildUi();
+            }
+
+            // ── UI construction ──────────────────────────────
+
+            private void BuildUi()
             {
                 Text = "设置你的快捷键喵";
                 FormBorderStyle = FormBorderStyle.FixedDialog;
                 MaximizeBox = false;
                 MinimizeBox = false;
                 StartPosition = FormStartPosition.CenterScreen;
-                ClientSize = new Size(380, 140);
+                ClientSize = new Size(400, 170);
                 KeyPreview = true;
                 ShowInTaskbar = false;
+                Font = new Font("Segoe UI", 9f);
 
-                _label = new Label();
-                _label.Text = "请按下要设置的快捷键组合\n（仅支持键盘，按 Esc 取消）\n\n默认使用Ins键~";
-                _label.Location = new Point(20, 14);
-                _label.Size = new Size(340, 112);
-                _label.TextAlign = ContentAlignment.MiddleCenter;
-                Controls.Add(_label);
+                // Real-time combo display
+                _comboLabel = new Label
+                {
+                    Text = "当前组合：(等待输入)",
+                    Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+                    Location = new Point(10, 14),
+                    Size = new Size(380, 36),
+                    TextAlign = ContentAlignment.MiddleCenter
+                };
+                Controls.Add(_comboLabel);
+
+                // Hint text
+                var hint = new Label
+                {
+                    Text = "按下组合后松开即可锁定\n按 Enter 确认 / Esc 清除",
+                    Location = new Point(10, 54),
+                    Size = new Size(380, 42),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = Color.FromArgb(128, 128, 128)
+                };
+                Controls.Add(hint);
+
+                // Buttons (centered, 20px gap each)
+                int btnY = 112;
+                var clearBtn = ColorUtil.MakeButton("清除", OnClear, false, false, Color.Black);
+                var confirmBtn = ColorUtil.MakeButton("确认", OnConfirm, true, false, Color.Black);
+                var cancelBtn = ColorUtil.MakeButton("取消", OnCancel, false, false, Color.Black);
+
+                int gap = 20;
+                int totalW = clearBtn.Width + confirmBtn.Width + cancelBtn.Width + gap * 2;
+                int x = (ClientSize.Width - totalW) / 2;
+                clearBtn.Location = new Point(x, btnY);
+                confirmBtn.Location = new Point(x + clearBtn.Width + gap, btnY);
+                cancelBtn.Location = new Point(x + clearBtn.Width + gap + confirmBtn.Width + gap, btnY);
+
+                Controls.Add(clearBtn);
+                Controls.Add(confirmBtn);
+                Controls.Add(cancelBtn);
             }
+
+            // ── Key tracking (capture & lock) ────────────────
 
             protected override void OnKeyDown(KeyEventArgs e)
             {
                 e.SuppressKeyPress = true;
+
+                // Enter → confirm captured combo
+                if (e.KeyCode == Keys.Enter)
+                {
+                    if (_hasMainKey) OnConfirm(this, EventArgs.Empty);
+                    return;
+                }
+
+                // Esc → clear capture, or cancel if already clear
                 if (e.KeyCode == Keys.Escape)
                 {
-                    DialogResult = DialogResult.Cancel;
-                    Close();
+                    if (_hasMainKey || _capturedMods != 0)
+                    {
+                        ClearCapture();
+                    }
+                    else
+                    {
+                        DialogResult = DialogResult.Cancel;
+                        Close();
+                    }
                     return;
                 }
-                if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.Menu ||
-                    e.KeyCode == Keys.ShiftKey || e.KeyCode == Keys.LWin ||
-                    e.KeyCode == Keys.RWin)
-                {
-                    string modText = e.Modifiers != Keys.None ? e.Modifiers.ToString() : "";
-                    if ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)
-                        modText = string.IsNullOrEmpty(modText) ? "Windows" : modText + ", Windows";
-                    _label.Text = "修饰键：Ctrl / Alt / Shift / Win + ..." +
-                        (!string.IsNullOrEmpty(modText) ? ("\n当前：" + modText) : "");
-                    return;
-                }
-                // 检测 Win 键（Win 键不被 .NET 的 e.Modifiers 识别，需通过 GetAsyncKeyState 检测）
-                bool winHeld = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-                if (e.Modifiers == Keys.None && !winHeld)
-                {
-                    _label.Text = "请至少包含一个修饰键（Ctrl/Alt/Shift/Win）\n\n按 Esc 取消";
-                    return;
-                }
+
+                // Read current modifier state (Ctrl/Alt/Shift from event, Win from native API)
                 uint mods = 0;
-                if ((e.Modifiers & Keys.Shift) == Keys.Shift) mods |= MOD_SHIFT;
                 if ((e.Modifiers & Keys.Control) == Keys.Control) mods |= MOD_CONTROL;
                 if ((e.Modifiers & Keys.Alt) == Keys.Alt) mods |= MOD_ALT;
+                if ((e.Modifiers & Keys.Shift) == Keys.Shift) mods |= MOD_SHIFT;
+                bool winHeld = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
+                            || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
                 if (winHeld) mods |= MOD_WIN;
-                Key = (uint)e.KeyCode;
+
+                // Update captured state
+                _capturedMods = mods;
+                if (!IsModifierKey(e.KeyCode))
+                {
+                    _capturedKey = e.KeyCode;
+                    _hasMainKey = true;
+                }
+
+                RefreshDisplay();
+            }
+
+            protected override void OnKeyUp(KeyEventArgs e)
+            {
+                e.SuppressKeyPress = true;
+                // Do nothing — captured state is locked until new key press
+            }
+
+            // ── Display ──────────────────────────────────────
+
+            private void RefreshDisplay()
+            {
+                var sb = new StringBuilder();
+                if ((_capturedMods & MOD_CONTROL) != 0) sb.Append("Ctrl + ");
+                if ((_capturedMods & MOD_ALT) != 0) sb.Append("Alt + ");
+                if ((_capturedMods & MOD_SHIFT) != 0) sb.Append("Shift + ");
+                if ((_capturedMods & MOD_WIN) != 0) sb.Append("Win + ");
+
+                if (!_hasMainKey)
+                {
+                    sb.Append("(等待主键)");
+                }
+                else
+                {
+                    sb.Append(KeyName((uint)_capturedKey));
+                }
+
+                _comboLabel.Text = "当前组合：" + sb.ToString();
+            }
+
+            // ── Button handlers ──────────────────────────────
+
+            private void OnConfirm(object sender, EventArgs e)
+            {
+                // 1) Must have a main key
+                if (!_hasMainKey)
+                {
+                    ShowMsg("请按一个主键（如字母、数字、F1-F24 等）\n\n不能只用修饰键");
+                    return;
+                }
+
+                // 2) No modifiers → warn user
+                if (_capturedMods == 0)
+                {
+                    var r = MessageBox.Show(this,
+                        "单独使用此键容易与其他程序冲突，确定要使用吗？",
+                        "警告", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (r == DialogResult.No) return;
+                }
+
+                uint vk = (uint)_capturedKey;
+                uint mods = _capturedMods;
+
+                // 3) Conflict pre-detection: try-register → immediately unregister
+                if (!RegisterHotKey(_targetHandle, HOTKEY_ID, mods | MOD_NOREPEAT, vk))
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    ShowMsg("该快捷键已被其他程序占用（错误码 " + err + "）\n\n请更换组合");
+                    return;
+                }
+                UnregisterHotKey(_targetHandle, HOTKEY_ID);
+
+                Key = vk;
                 Modifiers = mods;
                 DialogResult = DialogResult.OK;
                 Close();
+            }
+
+            private void OnClear(object sender, EventArgs e)
+            {
+                ClearCapture();
+            }
+
+            private void ClearCapture()
+            {
+                _capturedMods = 0;
+                _capturedKey = default(Keys);
+                _hasMainKey = false;
+                RefreshDisplay();
+            }
+
+            private void OnCancel(object sender, EventArgs e)
+            {
+                DialogResult = DialogResult.Cancel;
+                Close();
+            }
+
+            // ── Helpers ──────────────────────────────────────
+
+            private void ShowMsg(string text)
+            {
+                MessageBox.Show(this, text, "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            private static bool IsModifierKey(Keys keyCode)
+            {
+                switch (keyCode)
+                {
+                    case Keys.ControlKey:
+                    case Keys.LControlKey:
+                    case Keys.RControlKey:
+                    case Keys.Menu:
+                    case Keys.LMenu:
+                    case Keys.RMenu:
+                    case Keys.ShiftKey:
+                    case Keys.LShiftKey:
+                    case Keys.RShiftKey:
+                    case Keys.LWin:
+                    case Keys.RWin:
+                        return true;
+                    default:
+                        return false;
+                }
             }
         }
     }

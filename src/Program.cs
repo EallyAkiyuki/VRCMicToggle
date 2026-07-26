@@ -166,6 +166,7 @@ namespace VRCMicToggle
             InvalidateHotkeyDisplay();
             BuildTray();
             ApplyHotkey();
+            EnsureStartupPath();
             StartListener();
 
             if (!Config.Exists())
@@ -1094,6 +1095,39 @@ namespace VRCMicToggle
             }
             catch (UnauthorizedAccessException ex) { AppLogger.Log("SetStartup", ex); }
             catch (System.Security.SecurityException ex) { AppLogger.Log("SetStartup", ex); }
+        }
+
+        /// <summary>
+        /// 启动时校验：若配置为开机自启，但注册表中指向的不是当前 exe，
+        /// 则自动修正为当前 exe 路径（避免移动目录后开机启动旧版本）。
+        /// </summary>
+        private void EnsureStartupPath()
+        {
+            if (!_config.RunOnStartup) return;
+            try
+            {
+                const string key = @"Software\Microsoft\Windows\CurrentVersion\Run";
+                using (Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(key, false))
+                {
+                    if (rk == null) return;
+                    object val = rk.GetValue("VRCMicToggle");
+                    string regPath = val as string;
+                    if (regPath == null ||
+                        !string.Equals(regPath, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        AppLogger.Info("Startup path mismatch (reg='"
+                            + (regPath ?? "(null)") + "'), updating to current exe: "
+                            + Application.ExecutablePath);
+                        SetStartup(true);
+                    }
+                    else
+                    {
+                        AppLogger.Debug("Startup path OK: " + regPath);
+                    }
+                }
+            }
+            catch (UnauthorizedAccessException ex) { AppLogger.Log("EnsureStartupPath", ex); }
+            catch (System.Security.SecurityException ex) { AppLogger.Log("EnsureStartupPath", ex); }
         }
 
         private void ExitApp()

@@ -266,11 +266,13 @@ namespace VRCMicToggle
             Button cancelBtn = MakeButton(Lang.BtnCancel, OnCancel, false);
 
             // 使用 TextRenderer 测量按钮实际宽度
-            Font btnFont = new Font("Segoe UI", 9.5f);
-            int btnPadding = 28;
-            int okW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnSave, btnFont).Width + btnPadding);
-            int cancelW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnCancel, btnFont).Width + btnPadding);
-            btnFont.Dispose();
+            int okW, cancelW;
+            using (Font btnFont = new Font("Segoe UI", 9.5f))
+            {
+                int btnPadding = 28;
+                okW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnSave, btnFont).Width + btnPadding);
+                cancelW = Math.Max(72, TextRenderer.MeasureText(Lang.BtnCancel, btnFont).Width + btnPadding);
+            }
 
             // 确保右侧面板足够宽以容纳两个按钮（间距 8px，右侧留白 8px）
             int minRightW = okW + 8 + cancelW + 8;
@@ -556,6 +558,7 @@ namespace VRCMicToggle
         private int SwatchAt(Point p, int count, int offsetX)
         {
             int adjustedX = p.X - offsetX;
+            if (adjustedX < 0) return -1;
             int col = adjustedX / SWATCH_STEP;
             int row = p.Y / SWATCH_STEP;
             if (col < 0 || col >= SWATCH_COLS) return -1;

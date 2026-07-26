@@ -117,13 +117,13 @@ namespace VRCMicToggle
         private readonly List<System.Threading.Timer> _pendingTimers = new List<System.Threading.Timer>();
         private bool? _muted;
         private Config _config;
-        private bool _disposed;
+        private volatile bool _disposed;
         private System.Threading.Timer _oscPollTimer;
         private int _oscNoResponseCount;
-        private bool _firstPoll = true;
+        private volatile bool _firstPoll = true;
         private int _pollBusy;
         private int _cachedOscQueryPort;
-        private int _lastUdpUpdateTick;
+        private volatile int _lastUdpUpdateTick;
 
         private Icon _cachedUnknown;
         private Icon _cachedMuted;
@@ -173,7 +173,7 @@ namespace VRCMicToggle
                 SetHotkeyDialog();
             }
 
-                ShowTip(Lang.MsgStartupTip + _cachedHotkeyDisplay);
+            ShowTip(Lang.MsgStartupTip + _cachedHotkeyDisplay);
 
             _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, OscPollIntervalMs);
             lock (_pendingTimers) { _pendingTimers.Add(_oscPollTimer); }
@@ -203,7 +203,8 @@ namespace VRCMicToggle
                     bool udpRecent = _lastUdpUpdateTick != 0 && udpElapsed > 0 && udpElapsed < 5000;
                     if (!udpRecent)
                     {
-                        try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                        HotkeyWindow win = _window;
+                        if (win != null) { try { win.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (Exception) { } }
                     }
                     return;
                 }
@@ -213,23 +214,27 @@ namespace VRCMicToggle
                 int noResp = _oscNoResponseCount;
                 try
                 {
-                    _window.BeginInvoke((MethodInvoker)delegate
+                    HotkeyWindow win = _window;
+                    if (win != null)
                     {
-                        if (firstPoll && vrcRunning)
+                        win.BeginInvoke((MethodInvoker)delegate
                         {
-                            MessageBox.Show(
-                                Lang.OscNotConnectedBody,
-                                Lang.OscNotConnectedTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        }
-                        if (noResp >= 2)
-                        {
-                            _muted = null;
-                            SetIcon(IconState.Unknown);
-                            UpdateStatusText();
-                        }
-                    });
+                            if (firstPoll && vrcRunning)
+                            {
+                                MessageBox.Show(
+                                    Lang.OscNotConnectedBody,
+                                    Lang.OscNotConnectedTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            }
+                            if (noResp >= 2)
+                            {
+                                _muted = null;
+                                SetIcon(IconState.Unknown);
+                                UpdateStatusText();
+                            }
+                        });
+                    }
                 }
-                catch (InvalidOperationException) { }
+                catch (Exception) { }
             }
             catch (Exception ex)
             {
@@ -711,10 +716,11 @@ namespace VRCMicToggle
                 SetIcon(IconState.Unknown);
                 UpdateStatusText();
             };
-            if (_window != null && !_window.IsDisposed && _window.IsHandleCreated)
+            HotkeyWindow win = _window;
+            if (win != null && !win.IsDisposed && win.IsHandleCreated)
             {
-                try { _window.BeginInvoke(uiUpdate); }
-                catch (InvalidOperationException) { uiUpdate(); }
+                try { win.BeginInvoke(uiUpdate); }
+                catch (Exception) { uiUpdate(); }
             }
             else
             {
@@ -754,16 +760,20 @@ namespace VRCMicToggle
                     if (!requeued)
                     {
                         lock (_listenerLock) { _tracking = false; _listener = null; _activeListenPort = 0; }
-                        try
+                        HotkeyWindow win = _window;
+                        if (win != null)
                         {
-                            _window.BeginInvoke((MethodInvoker)delegate
+                            try
                             {
-                                _muted = null;
-                                SetIcon(IconState.Unknown);
-                                UpdateStatusText();
-                            });
+                                win.BeginInvoke((MethodInvoker)delegate
+                                {
+                                    _muted = null;
+                                    SetIcon(IconState.Unknown);
+                                    UpdateStatusText();
+                                });
+                            }
+                            catch (Exception) { }
                         }
-                        catch (InvalidOperationException) { }
                     }
                 }
             }
@@ -832,7 +842,8 @@ namespace VRCMicToggle
                         bool m = muted;
                         AppLogger.Info("Mic state from UDP: " + (m ? "Muted" : "Unmuted"));
                         _lastUdpUpdateTick = Environment.TickCount;
-                        try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                        HotkeyWindow win = _window;
+                        if (win != null) { try { win.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (Exception) { } }
                     }
                 }
             }
@@ -900,7 +911,7 @@ namespace VRCMicToggle
             if (newText != _cachedStatusText)
             {
                 _cachedStatusText = newText;
-                _statusItem.Text = newText;
+                if (_statusItem != null) _statusItem.Text = newText;
             }
             string tip = Lang.TooltipPrefix + state + " | " + HotkeyDisplay();
             if (tip.Length > MaxTooltipLength)
@@ -911,7 +922,7 @@ namespace VRCMicToggle
             if (tip != _cachedTipText)
             {
                 _cachedTipText = tip;
-                _notify.Text = tip;
+                if (_notify != null) _notify.Text = tip;
             }
         }
 

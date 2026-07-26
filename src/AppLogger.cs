@@ -10,6 +10,7 @@ namespace VRCMicToggle
     {
         private static readonly string LogPath;
         private static readonly string DebugLogPath;
+        private static readonly object _writeLock = new object();
         private const int MaxLogSizeBytes = 1024 * 1024;
 
         static AppLogger()
@@ -53,38 +54,44 @@ namespace VRCMicToggle
         {
             string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
                 + " " + message + Environment.NewLine;
-            try
+            lock (_writeLock)
             {
-                EnsureDir(LogPath);
-                File.AppendAllText(LogPath, line);
-            }
-            catch (Exception) { }
+                try
+                {
+                    EnsureDir(LogPath);
+                    File.AppendAllText(LogPath, line);
+                }
+                catch (Exception) { }
 #if DEBUG
-            try { WriteTo(DebugLogPath, line); } catch (Exception) { }
+                try { WriteTo(DebugLogPath, line); } catch (Exception) { }
 #endif
+            }
         }
 
         // 带自动轮转的单文件写入（Debug 专用）
         private static void WriteLog(string path, string level, string msg)
         {
-            try
+            lock (_writeLock)
             {
-                EnsureDir(path);
                 try
                 {
-                    if (File.Exists(path) && new FileInfo(path).Length > MaxLogSizeBytes)
+                    EnsureDir(path);
+                    try
                     {
-                        string backup = path + ".old";
-                        if (File.Exists(backup)) File.Delete(backup);
-                        File.Move(path, backup);
+                        if (File.Exists(path) && new FileInfo(path).Length > MaxLogSizeBytes)
+                        {
+                            string backup = path + ".old";
+                            if (File.Exists(backup)) File.Delete(backup);
+                            File.Move(path, backup);
+                        }
                     }
+                    catch (Exception) { }
+                    File.AppendAllText(path,
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) +
+                        " [" + level + "] " + msg + Environment.NewLine);
                 }
                 catch (Exception) { }
-                File.AppendAllText(path,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) +
-                    " [" + level + "] " + msg + Environment.NewLine);
             }
-            catch (Exception) { }
         }
 
         private static void WriteTo(string path, string line)

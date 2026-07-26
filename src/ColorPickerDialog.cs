@@ -212,7 +212,7 @@ namespace VRCMicToggle
 
             Label presetLabel = new Label
             {
-                Text = "预置颜色",
+                Text = "预设",
                 Font = _uiFontBold,
                 ForeColor = _fg,
                 Location = new Point(rx, ry),
@@ -474,7 +474,7 @@ namespace VRCMicToggle
             if (_recentColors.Count == 0)
             {
                 using (var br = new SolidBrush(_subFg))
-                    e.Graphics.DrawString("暂无", Font, br, 0, 2);
+                    e.Graphics.DrawString("没有最近使用", Font, br, 0, 2);
                 return;
             }
             PaintSwatches(e.Graphics, _recentColorsParsed);

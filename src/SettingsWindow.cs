@@ -95,7 +95,7 @@ namespace VRCMicToggle
 
             Label hint = new Label
             {
-                Text = "点击色块打开颜色选择器",
+                Text = "点击色块打开颜色选择器喵",
                 Font = TrackFont(new Font("Segoe UI", 9f)),
                 ForeColor = _subFg,
                 Location = new Point(pad, y),

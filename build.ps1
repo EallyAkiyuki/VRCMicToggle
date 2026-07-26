@@ -1,5 +1,15 @@
-$out = "VRCMic.exe"
+param(
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Release"
+)
+
+$outDir = "bin\$Configuration"
+$out = "$outDir\VRCMic.exe"
 $sourceFiles = @("src\Program.cs", "src\SettingsWindow.cs", "src\ColorPickerDialog.cs")
+
+if (-not (Test-Path $outDir)) {
+    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+}
 
 $found = $false
 foreach ($dir in @(
@@ -28,7 +38,25 @@ foreach ($f in $sourceFiles) {
     }
 }
 
-$buildArgs = @("/nologo", "/target:winexe", "/optimize+", "/unsafe", "/langversion:4", "/platform:anycpu", "/out:$out")
+Write-Host "Configuration: $Configuration" -ForegroundColor Cyan
+
+$buildArgs = @("/nologo", "/target:winexe", "/unsafe", "/langversion:4", "/platform:anycpu", "/out:$out")
+
+if ($Configuration -eq "Debug") {
+    $buildArgs += "/define:DEBUG"
+    $buildArgs += "/debug+"
+    $buildArgs += "/optimize-"
+    Write-Host "  DEBUG symbols: ON" -ForegroundColor DarkGray
+    Write-Host "  Optimize: OFF" -ForegroundColor DarkGray
+    Write-Host "  Debug info: ON" -ForegroundColor DarkGray
+} else {
+    $buildArgs += "/optimize+"
+    $buildArgs += "/debug-"
+    Write-Host "  DEBUG symbols: OFF" -ForegroundColor DarkGray
+    Write-Host "  Optimize: ON" -ForegroundColor DarkGray
+    Write-Host "  Debug info: OFF" -ForegroundColor DarkGray
+}
+
 if (Test-Path "resources\VRCMic.ico") {
     $buildArgs += "/win32icon:resources\VRCMic.ico"
 } else {
@@ -42,8 +70,9 @@ $buildArgs += $sourceFiles
 & $csc @buildArgs
 
 if ($LASTEXITCODE -eq 0) {
+    $fileSize = (Get-Item $out).Length
     Write-Host ""
-    Write-Host "Build OK -> $out" -ForegroundColor Green
+    Write-Host "Build OK ($Configuration) -> $out ($fileSize bytes)" -ForegroundColor Green
 } else {
     Write-Host ""
     Write-Host "Build FAILED (exit $LASTEXITCODE)" -ForegroundColor Red

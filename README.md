@@ -23,11 +23,10 @@
 - **双击切换** — 双击托盘图标快速切换麦克风
 - **深色/浅色主题自适应** — 颜色设置窗口自动跟随系统主题
 
-### 使用前提
+### Tips:
 
 1. VRChat 中打开 ** OSC**：`菜单 → 选项 → OSC → 启用`
 2. VRChat 语音设置保持 **Toggle Voice（切换开麦）** 开启（默认状态）
-3. 确保电脑与 VRChat 在同一台机器上（工具向 `127.0.0.1:9000` 发送 OSC）
 
 ### 使用方法
 
@@ -48,12 +47,18 @@
 需要 `.NET Framework 4.0+` 环境（Windows 自带）。
 
 ```powershell
-# 一键构建
+# Release 构建（默认）
 .\build.ps1
+
+# Debug 构建（含完整调试日志）
+.\build.ps1 -Configuration Debug
 
 # 或手动编译
 & "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
+
+构建产物位于 `bin\Release\VRCMic.exe` 或 `bin\Debug\VRCMic.exe`。
+Debug 构建会在 `%APPDATA%\VRCMicToggle\debug.log` 中输出完整的调试日志。
 
 ### 配置文件
 
@@ -113,12 +118,18 @@ SlashColor=#ECECEC
 Requires `.NET Framework 4.0+` (comes with Windows).
 
 ```powershell
-# One-click build
+# Release build (default)
 .\build.ps1
+
+# Debug build (with full debug logging)
+.\build.ps1 -Configuration Debug
 
 # Or compile manually
 & "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
+
+Build output is at `bin\Release\VRCMic.exe` or `bin\Debug\VRCMic.exe`.
+Debug builds write full debug logs to `%APPDATA%\VRCMicToggle\debug.log`.
 
 ### Configuration
 
@@ -178,12 +189,18 @@ SlashColor=#ECECEC
 `.NET Framework 4.0+` が必要です（Windows に標準搭載）。
 
 ```powershell
-# ワンクリックビルド
+# Release ビルド（デフォルト）
 .\build.ps1
+
+# Debug ビルド（完全なデバッグログ付き）
+.\build.ps1 -Configuration Debug
 
 # または手動コンパイル
 & "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize+ /unsafe /langversion:4 /platform:anycpu /win32icon:resources\VRCMic.ico /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll" /reference:"$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\System.dll" src\Program.cs src\SettingsWindow.cs src\ColorPickerDialog.cs
 ```
+
+ビルド出力は `bin\Release\VRCMic.exe` または `bin\Debug\VRCMic.exe` にあります。
+Debug ビルドは `%APPDATA%\VRCMicToggle\debug.log` に完全なデバッグログを出力します。
 
 ### 設定ファイル
 

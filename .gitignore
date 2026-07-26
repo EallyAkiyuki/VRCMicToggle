@@ -1,5 +1,6 @@
 # Build output
 VRCMic.exe
+bin/
 
 # IntelliJ / Rider
 .idea/

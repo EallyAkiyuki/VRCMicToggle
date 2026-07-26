@@ -36,7 +36,7 @@ namespace VRCMicToggle
 
         private static Color[] _presetColorsParsed;
 
-        private double _hue, _saturation, _lightness;
+        private double _hue, _saturation, _value;
         private double _lastRenderedHue = -1;
         private string _initialColorHex;
 
@@ -72,7 +72,7 @@ namespace VRCMicToggle
             ApplyTheme();
             SelectedColorHex = initialColor;
             _initialColorHex = initialColor;
-            HexToHsl(initialColor, out _hue, out _saturation, out _lightness);
+            HexToHsv(initialColor, out _hue, out _saturation, out _value);
             _recentColors = LoadRecentColors();
             _recentColorsParsed = ParseColors(_recentColors);
             if (_presetColorsParsed == null)
@@ -82,7 +82,7 @@ namespace VRCMicToggle
                     _presetColorsParsed[i] = ColorUtil.HexToColor(PresetColors[i]);
             }
             BuildUI();
-            UpdateFromHsl();
+            UpdateFromHsv();
         }
 
         private static Color[] ParseColors(IList<string> hexColors)
@@ -120,7 +120,7 @@ namespace VRCMicToggle
             int rightW = 160;
             int totalW = pad + leftW + gap + rightW + pad;
 
-            _slPanel = new Panel
+            _slPanel = new DbPanel
             {
                 Location = new Point(pad, pad),
                 Size = new Size(SL_SIZE, SL_SIZE),
@@ -309,7 +309,7 @@ namespace VRCMicToggle
             e.Graphics.DrawImageUnscaled(_slBitmap, 0, 0);
 
             float mx = (float)(_saturation * SL_SIZE);
-            float my = (float)((1.0 - _lightness) * SL_SIZE);
+            float my = (float)((1.0 - _value) * SL_SIZE);
             using (var pen = new Pen(Color.White, 2.5f))
                 e.Graphics.DrawEllipse(pen, mx - 7, my - 7, 14, 14);
             using (var pen = new Pen(Color.FromArgb(80, 0, 0, 0), 1.5f))
@@ -332,7 +332,7 @@ namespace VRCMicToggle
                 _slBitmap = new Bitmap(SL_SIZE, SL_SIZE, PixelFormat.Format24bppRgb);
             }
 
-            Color hueColor = HslToRgb(_hue, 1.0, 0.5);
+            Color hueColor = HsvToRgb(_hue, 1.0, 1.0);
             byte hr = hueColor.R, hg = hueColor.G, hb = hueColor.B;
             BitmapData bd = _slBitmap.LockBits(new Rectangle(0, 0, SL_SIZE, SL_SIZE), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
             try
@@ -343,7 +343,7 @@ namespace VRCMicToggle
                     int stride = bd.Stride;
                     for (int py = 0; py < SL_SIZE; py++)
                     {
-                        double lm = py / (double)(SL_SIZE - 1);
+                        double lm = 1.0 - py / (double)(SL_SIZE - 1);
                         byte* row = scan0 + py * stride;
                         for (int px = 0; px < SL_SIZE; px++)
                         {
@@ -377,8 +377,8 @@ namespace VRCMicToggle
             double x = Math.Max(0, Math.Min(SL_SIZE - 1, p.X));
             double y = Math.Max(0, Math.Min(SL_SIZE - 1, p.Y));
             _saturation = x / (double)(SL_SIZE - 1);
-            _lightness = 1.0 - (y / (double)(SL_SIZE - 1));
-            UpdateFromHsl();
+            _value = 1.0 - (y / (double)(SL_SIZE - 1));
+            UpdateFromHsv();
         }
 
         private void HuePanelPaint(object sender, PaintEventArgs e)
@@ -409,7 +409,7 @@ namespace VRCMicToggle
                         for (int px = 0; px < SL_SIZE; px++)
                         {
                             double h = (px / (double)SL_SIZE) * 360.0;
-                            Color c = HslToRgb(h, 1.0, 0.5);
+                            Color c = HsvToRgb(h, 1.0, 1.0);
                             int off = px * 3;
                             row[off] = c.B;
                             row[off + 1] = c.G;
@@ -432,13 +432,13 @@ namespace VRCMicToggle
         {
             double x = Math.Max(0, Math.Min(SL_SIZE - 1, p.X));
             _hue = (x / (double)(SL_SIZE - 1)) * 360.0;
-            UpdateFromHsl();
+            UpdateFromHsv();
         }
 
         private void PreviewPaint(object sender, PaintEventArgs e)
         {
             int half = _previewPanel.Width / 2;
-            Color current = HslToRgb(_hue, _saturation, _lightness);
+            Color current = HsvToRgb(_hue, _saturation, _value);
             Color initial = ColorUtil.HexToColor(_initialColorHex);
             using (var br = new SolidBrush(current))
                 e.Graphics.FillRectangle(br, 0, 0, half - 1, _previewPanel.Height - 1);
@@ -503,8 +503,8 @@ namespace VRCMicToggle
             int idx = SwatchAt(e.Location, PresetColors.Length);
             if (idx >= 0)
             {
-                HexToHsl(PresetColors[idx], out _hue, out _saturation, out _lightness);
-                UpdateFromHsl();
+                HexToHsv(PresetColors[idx], out _hue, out _saturation, out _value);
+                UpdateFromHsv();
             }
         }
 
@@ -513,8 +513,8 @@ namespace VRCMicToggle
             int idx = SwatchAt(e.Location, _recentColors.Count);
             if (idx >= 0)
             {
-                HexToHsl(_recentColors[idx], out _hue, out _saturation, out _lightness);
-                UpdateFromHsl();
+                HexToHsv(_recentColors[idx], out _hue, out _saturation, out _value);
+                UpdateFromHsv();
             }
         }
 
@@ -528,9 +528,9 @@ namespace VRCMicToggle
             return idx;
         }
 
-        private void UpdateFromHsl()
+        private void UpdateFromHsv()
         {
-            Color c = HslToRgb(_hue, _saturation, _lightness);
+            Color c = HsvToRgb(_hue, _saturation, _value);
             string hex = string.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
             SelectedColorHex = hex;
 
@@ -552,8 +552,8 @@ namespace VRCMicToggle
             {
                 Color c = ColorTranslator.FromHtml(hex);
                 string normalized = string.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
-                HexToHsl(normalized, out _hue, out _saturation, out _lightness);
-                UpdateFromHsl();
+                HexToHsv(normalized, out _hue, out _saturation, out _value);
+                UpdateFromHsv();
             }
             catch (ArgumentException) { }
         }
@@ -566,8 +566,8 @@ namespace VRCMicToggle
                 byte.TryParse(_bInput.Text, out b))
             {
                 string hex = string.Format("#{0:X2}{1:X2}{2:X2}", r, g, b);
-                HexToHsl(hex, out _hue, out _saturation, out _lightness);
-                UpdateFromHsl();
+                HexToHsv(hex, out _hue, out _saturation, out _value);
+                UpdateFromHsv();
             }
         }
 
@@ -603,13 +603,13 @@ namespace VRCMicToggle
             base.Dispose(disposing);
         }
 
-        private static Color HslToRgb(double h, double s, double l)
+        private static Color HsvToRgb(double h, double s, double v)
         {
             h = h % 360;
             if (h < 0) h += 360;
-            double c = (1.0 - Math.Abs(2.0 * l - 1.0)) * s;
+            double c = v * s;
             double x = c * (1.0 - Math.Abs((h / 60.0) % 2.0 - 1.0));
-            double m = l - c / 2.0;
+            double m = v - c;
 
             double r = 0, g = 0, b = 0;
             if (h < 60) { r = c; g = x; }
@@ -625,7 +625,7 @@ namespace VRCMicToggle
                 Clamp((int)Math.Round((b + m) * 255)));
         }
 
-        private static void HexToHsl(string hex, out double h, out double s, out double l)
+        private static void HexToHsv(string hex, out double h, out double s, out double v)
         {
             try
             {
@@ -635,7 +635,7 @@ namespace VRCMicToggle
                 double min = Math.Min(r, Math.Min(g, b));
                 double delta = max - min;
 
-                l = (max + min) / 2.0;
+                v = max;
 
                 if (delta == 0)
                 {
@@ -643,7 +643,7 @@ namespace VRCMicToggle
                 }
                 else
                 {
-                    s = l > 0.5 ? delta / (2.0 - max - min) : delta / (max + min);
+                    s = max == 0 ? 0 : delta / max;
                     if (max == r) h = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
                     else if (max == g) h = ((b - r) / delta + 2) * 60;
                     else h = ((r - g) / delta + 4) * 60;
@@ -651,7 +651,7 @@ namespace VRCMicToggle
             }
             catch (ArgumentException)
             {
-                h = 0; s = 0; l = 0.5;
+                h = 0; s = 0; v = 1.0;
             }
         }
 

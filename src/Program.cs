@@ -78,7 +78,9 @@ namespace VRCMicToggle
         private const float IconScaleFactor = 1.375f;
         private const int ParseMaxDepth = 8;
         private const int OscPollIntervalMs = 3000;
-        private const int OscPostToggleDelayMs = 600;
+        // OscPostToggleDelayMs removed: sync timer after toggle was removed because
+        // querying /input/Voice via OSCQuery returns the pulse value (0 after release),
+        // not the actual mic state, causing the icon to incorrectly revert.
 
         private NotifyIcon _notify;
         private ToolStripMenuItem _statusItem;
@@ -98,6 +100,7 @@ namespace VRCMicToggle
         private bool _firstPoll = true;
         private int _pollBusy;
         private int _cachedOscQueryPort;
+        private int _lastUdpUpdateTick; // Environment.TickCount when UDP MuteSelf was last received
 
         private Icon _cachedUnknown;
         private Icon _cachedMuted;
@@ -166,7 +169,14 @@ namespace VRCMicToggle
                 {
                     _oscNoResponseCount = 0;
                     bool m = mic.Value;
-                    try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                    // 如果 UDP 监听器在近 5 秒内更新过状态，则不以此 TCP 查询结果覆盖，
+                    // 因为 /input/Voice 返回的是脉冲值而非实际麦克风状态，可能覆盖掉正确结果。
+                    int udpElapsed = Environment.TickCount - _lastUdpUpdateTick;
+                    bool udpRecent = _lastUdpUpdateTick != 0 && udpElapsed > 0 && udpElapsed < 5000;
+                    if (!udpRecent)
+                    {
+                        try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
+                    }
                     return;
                 }
 
@@ -210,7 +220,7 @@ namespace VRCMicToggle
         }
 
         // 统一的麦克风状态查询：
-        // 优先使用缓存的 OSCQuery 端口直接查询 /input/Voice，
+        // 优先使用缓存的 OSCQuery 端口直接查询 /avatar/parameters/MuteSelf，
         // 如果缓存端口失败则清除缓存，枚举 VRChat 所有 TCP 监听端口逐一尝试。
         // 找到有效响应后缓存该端口供后续轮询使用。
         private bool? QueryMicStateUnified()
@@ -239,7 +249,15 @@ namespace VRCMicToggle
             return null;
         }
 
-        // 通过单次 TCP 连接查询 VRChat OSCQuery 服务器的 /input/Voice 状态。
+        // 通过单次 TCP 连接查询 VRChat OSCQuery 服务器的 /avatar/parameters/MuteSelf 状态。
+        //
+        // 实测 VRChat OSCQuery 响应（ACCESS:1=只读，TYPE:"T"=OSC bool）：
+        //   {"FULL_PATH":"/avatar/parameters/MuteSelf","ACCESS":1,"TYPE":"T","VALUE":[true]}   ← 已静音
+        //   {"FULL_PATH":"/avatar/parameters/MuteSelf","ACCESS":1,"TYPE":"T","VALUE":[false]}  ← 已开麦
+        //
+        // 注意：不能查询 /input/Voice（ACCESS:2=只写），它是瞬时输入参数，
+        // 发送脉冲 1→0 后 VALUE 始终为 [false]，与麦克风状态无关。
+        //
         // 同时承担 OSCQuery 探测职责：如果响应中包含 "VALUE" 则认为是有效的 OSCQuery 服务器。
         // 返回：true=已静音，false=已开麦，null=该端口非 OSCQuery 或连接失败。
         private static bool? TryQueryMicOnPort(int port)
@@ -252,7 +270,6 @@ namespace VRCMicToggle
                 bool connected = ar.AsyncWaitHandle.WaitOne(400, true);
                 if (!connected)
                 {
-                    // 连接超时，必须显式关闭以避免异步连接泄漏
                     try { client.Close(); } catch (Exception) { }
                     return null;
                 }
@@ -260,40 +277,39 @@ namespace VRCMicToggle
                 NetworkStream stream = client.GetStream();
                 stream.ReadTimeout = 600;
                 stream.WriteTimeout = 400;
-                byte[] req = Encoding.ASCII.GetBytes("GET /input/Voice HTTP/1.0\r\n\r\n");
+                byte[] req = Encoding.ASCII.GetBytes("GET /avatar/parameters/MuteSelf HTTP/1.0\r\n\r\n");
                 stream.Write(req, 0, req.Length);
                 stream.Flush();
 
-                // 读取响应（可能分多个 TCP 段到达）
-                byte[] buf = new byte[1024];
+                // 读取响应（OSCQuery 响应约 80 字节，2048 足够）
+                byte[] buf = new byte[2048];
                 int totalRead = 0;
                 while (totalRead < buf.Length)
                 {
                     int n = stream.Read(buf, totalRead, buf.Length - totalRead);
                     if (n <= 0) break;
                     totalRead += n;
-                    // 如果已经收到足够的数据来判断，可以提前退出
+                    // 等到 VALUE 数据完整到达（看到 ] 闭合）再退出
                     string partial = Encoding.ASCII.GetString(buf, 0, totalRead);
                     if (partial.IndexOf("\r\n\r\n") >= 0 &&
-                        (partial.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         partial.IndexOf("value", StringComparison.OrdinalIgnoreCase) >= 0))
+                        partial.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        partial.IndexOf(']') >= 0)
                         break;
                 }
                 if (totalRead == 0) return null;
                 string resp = Encoding.ASCII.GetString(buf, 0, totalRead);
 
-                // 如果响应不包含 VALUE，说明这不是 OSCQuery 服务器
+                // 不包含 VALUE 说明不是 OSCQuery 服务器
                 int valIdx = resp.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase);
                 if (valIdx < 0) return null;
 
                 string valPart = resp.Substring(valIdx);
-                // OSCQuery 的 VALUE 可能是数组格式 [true]/[false]，也可能是裸值 true/false
-                if (valPart.IndexOf("[false]", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    (valPart.IndexOf(": false", StringComparison.OrdinalIgnoreCase) >= 0 && valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) < 0 && valPart.IndexOf(": true", StringComparison.OrdinalIgnoreCase) < 0))
-                    return true;   // 已静音
-                if (valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    valPart.IndexOf(": true", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return false;  // 已开麦
+                // VRChat MuteSelf 固定返回 [true] 或 [false]（OSC bool 类型 T/F）
+                // [true] = 已静音，[false] = 已开麦
+                if (valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+                if (valPart.IndexOf("[false]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
                 return null;
             }
             catch (Exception)
@@ -533,35 +549,11 @@ namespace VRCMicToggle
                 lock (_pendingTimers) { _pendingTimers.Add(offTimer); }
             }
 
-            // 快捷键切换后，延迟主动查询一次麦克风状态以立即更新图标。
-            // 因为 UDP 推送可能无法到达（VRC 默认 OSC 输出端口是 9000，而本程序监听 9001），
-            // 所以需要在切换后主动轮询来同步状态。
-            System.Threading.Timer syncTimer = null;
-            syncTimer = new System.Threading.Timer(_ =>
-            {
-                try
-                {
-                    if (!_disposed)
-                    {
-                        bool? mic = QueryMicStateUnified();
-                        if (mic.HasValue)
-                        {
-                            bool m = mic.Value;
-                            try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Log("PostToggleSync", ex);
-                }
-                finally
-                {
-                    lock (_pendingTimers) { _pendingTimers.Remove(syncTimer); }
-                    syncTimer.Dispose();
-                }
-            }, null, OscPostToggleDelayMs, Timeout.Infinite);
-            lock (_pendingTimers) { _pendingTimers.Add(syncTimer); }
+            // 切换后不再主动 TCP 查询 /input/Voice 来同步图标：
+            // 该路径返回的是脉冲值（发送 1→0 后始终为 0/false），而非实际麦克风状态，
+            // 会导致 UDP 监听器刚设置的正确状态被覆盖（表现为"图标闪到开麦后马上切回闭麦"）。
+            // 现在完全依赖 UDP 推送（/avatar/parameters/MuteSelf）来更新图标，
+            // 若 UDP 未到达则由 3 秒周期轮询兜底。
         }
 
         private static byte[] OscEncode(string address, int value)
@@ -747,6 +739,7 @@ namespace VRCMicToggle
                     if (ok)
                     {
                         bool m = muted;
+                        _lastUdpUpdateTick = Environment.TickCount;
                         try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
                     }
                 }

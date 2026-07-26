@@ -1,9 +1,8 @@
-// Program.cs — 入口、AppContext（托盘/热键/OSC）、Config、AppLogger、Theme、ColorUtil、DbPanel
+// Program.cs — 入口 + AppContext（托盘/热键/OSC）
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -12,7 +11,7 @@ using System.Text;
 using System.Diagnostics;
 using System.Threading;
 using System.Windows.Forms;
-using Microsoft.Win32;
+
 namespace VRCMicToggle
 {
     // 程序入口：DPI 感知 + 单实例互斥
@@ -25,14 +24,9 @@ namespace VRCMicToggle
         private static void Main()
         {
             AppLogger.Info("=== VRCMicToggle starting ===");
-            AppLogger.Debug("OS: " + Environment.OSVersion + ", CLR: " + Environment.Version + ", PID: " + Process.GetCurrentProcess().Id);
             if (Environment.OSVersion.Version >= new Version(6, 0, 0))
             {
-                try
-                {
-                    SetProcessDPIAware();
-                    AppLogger.Debug("SetProcessDPIAware called");
-                }
+                try { SetProcessDPIAware(); }
                 catch (Exception ex) { AppLogger.Log("SetProcessDPIAware", ex); }
             }
             bool createdNew;
@@ -40,16 +34,13 @@ namespace VRCMicToggle
             {
                 if (!createdNew)
                 {
-                    AppLogger.Warn("Another instance is already running, exiting");
+                    AppLogger.Warn("Another instance is already running");
                     MessageBox.Show("VRCMic已在运行，新实例即将退出~", "VRCMic", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                AppLogger.Debug("Single instance mutex acquired");
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                AppLogger.Debug("Running AppContext main loop");
                 Application.Run(new AppContext());
-                AppLogger.Info("Application.Run returned");
             }
         }
     }
@@ -71,19 +62,23 @@ namespace VRCMicToggle
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
 
-        // ── 常量定义 ──────────────────────────────────────
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, int ulReserved);
 
-        private const int VK_LWIN = 0x5B;
-        private const int VK_RWIN = 0x5C;
+        // ── 常量 ──────────────────────────────────────────
 
-        private const uint MOD_ALT = 0x0001;
-        private const uint MOD_CONTROL = 0x0002;
-        private const uint MOD_SHIFT = 0x0004;
-        private const uint MOD_WIN = 0x0008;
-        private const uint MOD_NOREPEAT = 0x4000;
-        private const int WM_HOTKEY = 0x0312;
-        private const int HOTKEY_ID = 1;
+        // 共享常量（HotkeyCaptureForm / HotkeyWindow 也需要）
+        internal const int VK_LWIN = 0x5B;
+        internal const int VK_RWIN = 0x5C;
 
+        internal const uint MOD_ALT = 0x0001;
+        internal const uint MOD_CONTROL = 0x0002;
+        internal const uint MOD_SHIFT = 0x0004;
+        internal const uint MOD_WIN = 0x0008;
+        internal const uint MOD_NOREPEAT = 0x4000;
+        internal const int HOTKEY_ID = 1;
+
+        // AppContext 私有常量
         private const string VrcAddress = "/input/Voice";
         private const int VrcPort = 9000;
         private const int ListenPort = 9001;
@@ -96,9 +91,8 @@ namespace VRCMicToggle
         private const float IconScaleFactor = 1.375f;
         private const int ParseMaxDepth = 8;
         private const int OscPollIntervalMs = 3000;
-        // OscPostToggleDelayMs removed: sync timer after toggle was removed because
-        // querying /input/Voice via OSCQuery returns the pulse value (0 after release),
-        // not the actual mic state, causing the icon to incorrectly revert.
+        private const int TCP_TABLE_OWNER_PID_LISTEN = 3;
+        private const int AF_INET = 2;
 
         // ── 字段 ──────────────────────────────────────────
 
@@ -120,7 +114,7 @@ namespace VRCMicToggle
         private bool _firstPoll = true;
         private int _pollBusy;
         private int _cachedOscQueryPort;
-        private int _lastUdpUpdateTick; // Environment.TickCount when UDP MuteSelf was last received
+        private int _lastUdpUpdateTick;
 
         private Icon _cachedUnknown;
         private Icon _cachedMuted;
@@ -137,28 +131,26 @@ namespace VRCMicToggle
         private static readonly KeysConverter SharedKeysConverter = new KeysConverter();
 
         private enum IconState { Unknown, Muted, Unmuted }
+        private IconState _currentIconState = (IconState)(-1);
 
-        // ── 构造 / 初始化 ─────────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  构造 / 初始化
+        // ════════════════════════════════════════════════════
 
         public AppContext()
         {
-            AppLogger.Debug("AppContext constructor begin");
             _config = Config.Load();
-            AppLogger.Debug("Config loaded: HotkeyMods=" + _config.HotkeyMods + " HotkeyKey=" + _config.HotkeyKey + " RunOnStartup=" + _config.RunOnStartup);
             _muted = null;
 
             _sender = new UdpClient();
             _sender.Connect(IPAddress.Loopback, VrcPort);
-            AppLogger.Debug("UDP sender connected to 127.0.0.1:" + VrcPort);
 
             _oscOnMsg = OscEncode(VrcAddress, 1);
             _oscOffMsg = OscEncode(VrcAddress, 0);
-            AppLogger.Debug("OSC toggle messages pre-encoded: ON=" + _oscOnMsg.Length + "B OFF=" + _oscOffMsg.Length + "B");
 
             _window = new HotkeyWindow();
             _window.HotkeyPressed += OnHotkeyPressed;
-            IntPtr dummy = _window.Handle;
-            AppLogger.Debug("HotkeyWindow created, handle=" + dummy);
+            IntPtr dummy = _window.Handle; // force handle creation
 
             BuildIconCache();
             InvalidateHotkeyDisplay();
@@ -168,7 +160,6 @@ namespace VRCMicToggle
 
             if (!Config.Exists())
             {
-                AppLogger.Debug("First run detected (no config file), opening hotkey dialog");
                 SetHotkeyDialog();
             }
 
@@ -176,27 +167,19 @@ namespace VRCMicToggle
 
             _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, OscPollIntervalMs);
             lock (_pendingTimers) { _pendingTimers.Add(_oscPollTimer); }
-            AppLogger.Debug("OSC poll timer started (interval=" + OscPollIntervalMs + "ms, initialDelay=2000ms)");
             AppLogger.Info("AppContext initialized successfully");
         }
 
-        // 每 3 秒主动检测一次 OSC / 麦克风状态：
-        // - 只有首次启动的那一次轮询才尝试弹窗（且需检测到 VRChat 进程），
-        //   之后的轮询只更新状态，绝不弹窗；
-        // - VRChat 连续两次未响应，则把图标更新为灰色（未知状态）；
-        // - 使用单次 TCP 连接同时完成 OSCQuery 探测和麦克风状态查询，
-        //   并缓存已发现的 OSCQuery 端口，避免每次轮询都重新探测。
+        // ════════════════════════════════════════════════════
+        //  OSCQuery 轮询（每 3 秒检测麦克风状态）
+        // ════════════════════════════════════════════════════
+
         private void PollOscState()
         {
             if (_disposed) return;
-            if (Interlocked.CompareExchange(ref _pollBusy, 1, 0) != 0)
-            {
-                AppLogger.Debug("PollOscState skipped (previous poll still running)");
-                return;
-            }
+            if (Interlocked.CompareExchange(ref _pollBusy, 1, 0) != 0) return;
             bool firstPoll = _firstPoll;
             _firstPoll = false;
-            AppLogger.Debug("PollOscState begin (first=" + firstPoll + ", cachedPort=" + _cachedOscQueryPort + ")");
             try
             {
                 bool? mic = QueryMicStateUnified();
@@ -204,28 +187,19 @@ namespace VRCMicToggle
                 {
                     _oscNoResponseCount = 0;
                     bool m = mic.Value;
-                    AppLogger.Debug("PollOscState: mic state = " + (m ? "muted" : "unmuted"));
+                    // 如果最近 5 秒内有 UDP 更新，不覆盖（UDP 更及时）
                     int udpElapsed = Environment.TickCount - _lastUdpUpdateTick;
                     bool udpRecent = _lastUdpUpdateTick != 0 && udpElapsed > 0 && udpElapsed < 5000;
                     if (!udpRecent)
                     {
-                        AppLogger.Debug("PollOscState: UDP not recent, updating state on UI thread");
                         try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
-                    }
-                    else
-                    {
-                        AppLogger.Debug("PollOscState: UDP recent (" + udpElapsed + "ms ago), skipping override");
                     }
                     return;
                 }
 
-                AppLogger.Debug("PollOscState: mic query returned null (VRChat not responding)");
-                bool vrcRunning = false;
-                try { Process[] procs = Process.GetProcessesByName("VRChat"); try { vrcRunning = procs.Length > 0; } finally { for (int pi = 0; pi < procs.Length; pi++) procs[pi].Dispose(); } } catch (Exception) { }
-
+                bool vrcRunning = IsVrcRunning();
                 _oscNoResponseCount++;
                 int noResp = _oscNoResponseCount;
-                AppLogger.Debug("PollOscState: noResponseCount=" + noResp + ", vrcRunning=" + vrcRunning);
                 try
                 {
                     _window.BeginInvoke((MethodInvoker)delegate
@@ -241,7 +215,6 @@ namespace VRCMicToggle
                         }
                         if (noResp >= 2)
                         {
-                            AppLogger.Debug("PollOscState: >=2 no-response, setting Unknown state");
                             _muted = null;
                             SetIcon(IconState.Unknown);
                             UpdateStatusText();
@@ -260,56 +233,34 @@ namespace VRCMicToggle
             }
         }
 
-        // 统一的麦克风状态查询：
-        // 优先使用缓存的 OSCQuery 端口直接查询 /avatar/parameters/MuteSelf，
-        // 如果缓存端口失败则清除缓存，枚举 VRChat 所有 TCP 监听端口逐一尝试。
-        // 找到有效响应后缓存该端口供后续轮询使用。
+        // 统一的麦克风状态查询：优先缓存端口，失败则枚举 VRChat TCP 端口逐一尝试
         private bool? QueryMicStateUnified()
         {
             int cached = _cachedOscQueryPort;
             if (cached > 0)
             {
-                AppLogger.Debug("QueryMicStateUnified: trying cached port " + cached);
                 bool? result = TryQueryMicOnPort(cached);
-                if (result.HasValue)
-                {
-                    AppLogger.Debug("QueryMicStateUnified: cached port " + cached + " returned " + result.Value);
-                    return result;
-                }
-                AppLogger.Debug("QueryMicStateUnified: cached port " + cached + " failed, clearing cache");
+                if (result.HasValue) return result;
                 _cachedOscQueryPort = 0;
             }
 
             List<int> ports = GetVrcTcpPorts();
-            AppLogger.Debug("QueryMicStateUnified: found " + ports.Count + " VRChat TCP listen ports");
             if (ports.Count == 0) return null;
             foreach (int port in ports)
             {
                 if (port == cached) continue;
-                AppLogger.Debug("QueryMicStateUnified: trying port " + port);
                 bool? result = TryQueryMicOnPort(port);
                 if (result.HasValue)
                 {
                     _cachedOscQueryPort = port;
-                    AppLogger.Debug("QueryMicStateUnified: port " + port + " succeeded, caching it");
                     return result;
                 }
             }
-            AppLogger.Debug("QueryMicStateUnified: no port returned a valid result");
             return null;
         }
 
-        // 通过单次 TCP 连接查询 VRChat OSCQuery 服务器的 /avatar/parameters/MuteSelf 状态。
-        //
-        // 实测 VRChat OSCQuery 响应（ACCESS:1=只读，TYPE:"T"=OSC bool）：
-        //   {"FULL_PATH":"/avatar/parameters/MuteSelf","ACCESS":1,"TYPE":"T","VALUE":[true]}   ← 已静音
-        //   {"FULL_PATH":"/avatar/parameters/MuteSelf","ACCESS":1,"TYPE":"T","VALUE":[false]}  ← 已开麦
-        //
-        // 注意：不能查询 /input/Voice（ACCESS:2=只写），它是瞬时输入参数，
-        // 发送脉冲 1→0 后 VALUE 始终为 [false]，与麦克风状态无关。
-        //
-        // 同时承担 OSCQuery 探测职责：如果响应中包含 "VALUE" 则认为是有效的 OSCQuery 服务器。
-        // 返回：true=已静音，false=已开麦，null=该端口非 OSCQuery 或连接失败。
+        // 通过单次 TCP 连接查询 VRChat OSCQuery 的 /avatar/parameters/MuteSelf
+        // 返回：true=已静音，false=已开麦，null=非 OSCQuery 或连接失败
         private static bool? TryQueryMicOnPort(int port)
         {
             TcpClient client = null;
@@ -320,12 +271,10 @@ namespace VRCMicToggle
                 bool connected = ar.AsyncWaitHandle.WaitOne(400, true);
                 if (!connected)
                 {
-                    AppLogger.Debug("TryQueryMicOnPort(" + port + "): connect timeout");
                     try { client.Close(); } catch (Exception) { }
                     return null;
                 }
                 client.EndConnect(ar);
-                AppLogger.Debug("TryQueryMicOnPort(" + port + "): connected");
                 NetworkStream stream = client.GetStream();
                 stream.ReadTimeout = 600;
                 stream.WriteTimeout = 400;
@@ -346,66 +295,35 @@ namespace VRCMicToggle
                         partial.IndexOf(']') >= 0)
                         break;
                 }
-                if (totalRead == 0)
-                {
-                    AppLogger.Debug("TryQueryMicOnPort(" + port + "): empty response");
-                    return null;
-                }
-                string resp = Encoding.ASCII.GetString(buf, 0, totalRead);
-                AppLogger.Debug("TryQueryMicOnPort(" + port + "): response=" + totalRead + "B");
+                if (totalRead == 0) return null;
 
+                string resp = Encoding.ASCII.GetString(buf, 0, totalRead);
                 int valIdx = resp.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase);
-                if (valIdx < 0)
-                {
-                    AppLogger.Debug("TryQueryMicOnPort(" + port + "): no VALUE in response, not OSCQuery");
-                    return null;
-                }
+                if (valIdx < 0) return null;
 
                 string valPart = resp.Substring(valIdx);
-                if (valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    AppLogger.Debug("TryQueryMicOnPort(" + port + "): MuteSelf=true (muted)");
-                    return true;
-                }
-                if (valPart.IndexOf("[false]", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    AppLogger.Debug("TryQueryMicOnPort(" + port + "): MuteSelf=false (unmuted)");
-                    return false;
-                }
-                AppLogger.Debug("TryQueryMicOnPort(" + port + "): VALUE found but unrecognized");
+                if (valPart.IndexOf("[true]", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (valPart.IndexOf("[false]", StringComparison.OrdinalIgnoreCase) >= 0) return false;
                 return null;
             }
             catch (Exception ex)
             {
-                AppLogger.Debug("TryQueryMicOnPort(" + port + "): exception: " + ex.Message);
+                AppLogger.Debug("TryQueryMicOnPort(" + port + "): " + ex.Message);
                 return null;
             }
             finally
             {
-                if (client != null)
-                {
-                    try { client.Close(); } catch (Exception) { }
-                }
+                if (client != null) { try { client.Close(); } catch (Exception) { } }
             }
         }
 
-        [DllImport("iphlpapi.dll", SetLastError = true)]
-        private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, int ulReserved);
-
-        private const int TCP_TABLE_OWNER_PID_LISTEN = 3;
-        private const int AF_INET = 2;
-
+        // 枚举 VRChat 进程的所有 TCP LISTENING 端口
         private static List<int> GetVrcTcpPorts()
         {
             List<int> ports = new List<int>();
-            HashSet<int> vrcPids = new HashSet<int>();
-            try { Process[] procs = Process.GetProcessesByName("VRChat"); try { foreach (Process p in procs) { try { vrcPids.Add(p.Id); } catch (Exception) { } } } finally { for (int pi = 0; pi < procs.Length; pi++) procs[pi].Dispose(); } } catch (Exception) { }
-            if (vrcPids.Count == 0)
-            {
-                AppLogger.Debug("GetVrcTcpPorts: VRChat process not found");
-                return ports;
-            }
-            AppLogger.Debug("GetVrcTcpPorts: VRChat PIDs: " + string.Join(",", new List<int>(vrcPids).ConvertAll(p => p.ToString()).ToArray()));
+            HashSet<int> vrcPids = GetVrcPids();
+            if (vrcPids.Count == 0) return ports;
+
             int size = 0;
             uint ret = GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
             if (ret != 0 && ret != 122) return ports;
@@ -416,7 +334,6 @@ namespace VRCMicToggle
                 ret = GetExtendedTcpTable(table, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
                 if (ret != 0) return ports;
                 int count = Marshal.ReadInt32(table);
-                AppLogger.Debug("GetVrcTcpPorts: " + count + " TCP listen entries");
                 for (int i = 0; i < count; i++)
                 {
                     IntPtr entry = new IntPtr(table.ToInt64() + 4 + i * 24);
@@ -434,13 +351,39 @@ namespace VRCMicToggle
             return ports;
         }
 
-        // ── 资源释放 ──────────────────────────────────────
+        private static HashSet<int> GetVrcPids()
+        {
+            HashSet<int> pids = new HashSet<int>();
+            try
+            {
+                Process[] procs = Process.GetProcessesByName("VRChat");
+                try { foreach (Process p in procs) { try { pids.Add(p.Id); } catch (Exception) { } } }
+                finally { for (int i = 0; i < procs.Length; i++) procs[i].Dispose(); }
+            }
+            catch (Exception) { }
+            return pids;
+        }
+
+        private static bool IsVrcRunning()
+        {
+            try
+            {
+                Process[] procs = Process.GetProcessesByName("VRChat");
+                bool running = procs.Length > 0;
+                for (int i = 0; i < procs.Length; i++) procs[i].Dispose();
+                return running;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // ════════════════════════════════════════════════════
+        //  资源释放
+        // ════════════════════════════════════════════════════
 
         protected override void Dispose(bool disposing)
         {
             if (disposing && !_disposed)
             {
-                AppLogger.Debug("AppContext.Dispose begin");
                 _disposed = true;
                 try { StopListener(); } catch (ObjectDisposedException) { }
                 try { UnregisterHotKey(_window.Handle, HOTKEY_ID); } catch (InvalidOperationException) { }
@@ -462,12 +405,14 @@ namespace VRCMicToggle
                 try { if (_sender != null) { _sender.Close(); _sender.Dispose(); } } catch (ObjectDisposedException) { }
                 _sender = null;
                 if (_window != null) { _window.Dispose(); _window = null; }
-                AppLogger.Debug("AppContext.Dispose complete");
+                AppLogger.Info("AppContext disposed");
             }
             base.Dispose(disposing);
         }
 
-        // ── 系统托盘 / 右键菜单 ────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  系统托盘 / 右键菜单
+        // ════════════════════════════════════════════════════
 
         private void BuildTray()
         {
@@ -533,11 +478,12 @@ namespace VRCMicToggle
                 "关于", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        // ── 快捷键管理 ────────────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  快捷键管理
+        // ════════════════════════════════════════════════════
 
         private void SetHotkeyDialog()
         {
-            AppLogger.Debug("SetHotkeyDialog: opening hotkey capture dialog");
             UnregisterHotKey(_window.Handle, HOTKEY_ID);
             using (HotkeyCaptureForm dlg = new HotkeyCaptureForm(_window.Handle))
             {
@@ -551,17 +497,12 @@ namespace VRCMicToggle
                     ShowTip("快捷键设置为：" + _cachedHotkeyDisplay);
                     AppLogger.Info("Hotkey changed to: " + _cachedHotkeyDisplay);
                 }
-                else
-                {
-                    AppLogger.Debug("SetHotkeyDialog: dialog cancelled");
-                }
             }
             ApplyHotkey();
         }
 
         private void OpenColorSettings()
         {
-            AppLogger.Debug("OpenColorSettings: opening color settings window");
             using (SettingsWindow w = new SettingsWindow(_config))
             {
                 if (w.ShowDialog(_window) == DialogResult.OK)
@@ -571,10 +512,6 @@ namespace VRCMicToggle
                     IconState st = IconState.Unknown;
                     if (_muted.HasValue) st = _muted.Value ? IconState.Muted : IconState.Unmuted;
                     SetIcon(st);
-                }
-                else
-                {
-                    AppLogger.Debug("OpenColorSettings: dialog cancelled");
                 }
             }
         }
@@ -592,17 +529,14 @@ namespace VRCMicToggle
 
         private void ApplyHotkey()
         {
-            AppLogger.Debug("ApplyHotkey: unregistering existing hotkey");
             UnregisterHotKey(_window.Handle, HOTKEY_ID);
             uint vk = _config.HotkeyKey;
-            if (vk == 0) { AppLogger.Warn("ApplyHotkey: vk=0, skipping registration"); UpdateStatusText(); return; }
+            if (vk == 0) { UpdateStatusText(); return; }
             uint mods = _config.HotkeyMods | MOD_NOREPEAT;
-            AppLogger.Debug("ApplyHotkey: registering vk=" + vk + " mods=0x" + mods.ToString("X"));
             bool ok = RegisterHotKey(_window.Handle, HOTKEY_ID, mods, vk);
             if (!ok)
             {
                 int err = Marshal.GetLastWin32Error();
-                AppLogger.Warn("ApplyHotkey: RegisterHotKey failed, error=" + err);
                 string msg = "注册快捷键失败：" + _cachedHotkeyDisplay + " (错误码 " + err + ")\n 快捷键可能被占用";
                 ShowTip(msg);
                 MessageBox.Show(msg, "快捷键注册失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -619,7 +553,7 @@ namespace VRCMicToggle
             return _cachedHotkeyDisplay ?? string.Empty;
         }
 
-        private static string KeyName(uint vk)
+        internal static string KeyName(uint vk)
         {
             try
             {
@@ -632,11 +566,12 @@ namespace VRCMicToggle
             }
         }
 
-        // ── OSC 发送 / 编码 ───────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  OSC 发送 / 编码
+        // ════════════════════════════════════════════════════
 
         private void OnHotkeyPressed()
         {
-            AppLogger.Debug("OnHotkeyPressed: sending OSC toggle to 127.0.0.1:" + VrcPort);
             UdpClient sender = _sender;
             byte[] onMsg = _oscOnMsg;
             byte[] offMsg = _oscOffMsg;
@@ -645,28 +580,20 @@ namespace VRCMicToggle
                 try
                 {
                     sender.Send(onMsg, onMsg.Length);
-                    AppLogger.Debug("OnHotkeyPressed: OSC ON sent (" + onMsg.Length + "B)");
                 }
                 catch (SocketException ex) { AppLogger.Log("OnHotkeyPressed:OSC_ON", ex); }
                 catch (ObjectDisposedException) { }
+
                 System.Threading.Timer offTimer = null;
                 offTimer = new System.Threading.Timer(_ =>
                 {
-                    try
-                    {
-                        sender.Send(offMsg, offMsg.Length);
-                        AppLogger.Debug("OnHotkeyPressed: OSC OFF sent (" + offMsg.Length + "B) after " + OscToggleDelayMs + "ms delay");
-                    }
+                    try { sender.Send(offMsg, offMsg.Length); }
                     catch (SocketException ex) { AppLogger.Log("OnHotkeyPressed:OSC_OFF", ex); }
                     catch (ObjectDisposedException) { }
                     lock (_pendingTimers) { _pendingTimers.Remove(offTimer); }
                     offTimer.Dispose();
                 }, null, OscToggleDelayMs, Timeout.Infinite);
                 lock (_pendingTimers) { _pendingTimers.Add(offTimer); }
-            }
-            else
-            {
-                AppLogger.Warn("OnHotkeyPressed: sender or messages not available, skipping send");
             }
         }
 
@@ -693,20 +620,17 @@ namespace VRCMicToggle
             for (int i = 0; i < pad; i++) ms.WriteByte(0);
         }
 
-        // ── UDP 监听（接收 VRChat 的 MuteSelf 广播）────────
+        // ════════════════════════════════════════════════════
+        //  UDP 监听（接收 VRChat 的 MuteSelf 广播）
+        // ════════════════════════════════════════════════════
 
         private void StartListener()
         {
             lock (_listenerLock)
             {
-                if (_tracking)
-                {
-                    AppLogger.Debug("StartListener: already tracking on port " + _activeListenPort);
-                    return;
-                }
+                if (_tracking) return;
                 _tracking = true;
             }
-            AppLogger.Debug("StartListener: attempting ports " + ListenPort + "-" + (ListenPort + ListenPortRetryCount - 1));
             int[] portsToTry = new int[ListenPortRetryCount];
             for (int p = 0; p < ListenPortRetryCount; p++) portsToTry[p] = ListenPort + p;
             Exception lastEx = null;
@@ -739,13 +663,11 @@ namespace VRCMicToggle
                 }
             }
             lock (_listenerLock) { _tracking = false; }
-            AppLogger.Warn("StartListener: all ports failed. Last error: " + (lastEx != null ? lastEx.Message : "unknown"));
             ShowTip("无法监听 " + ListenPort + "-" + (ListenPort + ListenPortRetryCount - 1) + " 端口：" + (lastEx != null ? lastEx.Message : "未知错误") + "\n（端口可能被其他 OSC 工具占用，切换功能不受影响）");
         }
 
         private void StopListener()
         {
-            AppLogger.Debug("StopListener called");
             UdpClient toClose = null;
             lock (_listenerLock)
             {
@@ -756,9 +678,6 @@ namespace VRCMicToggle
                 _activeListenPort = 0;
             }
             try { if (toClose != null) toClose.Close(); } catch (ObjectDisposedException) { }
-            // BUGFIX(B3): StopListener may be called from a non-UI thread
-            // (e.g. future background cleanup paths). Marshal the UI state
-            // reset via BeginInvoke so it is always safe.
             _muted = null;
             MethodInvoker uiUpdate = delegate
             {
@@ -792,10 +711,9 @@ namespace VRCMicToggle
                 IPEndPoint ep = new IPEndPoint(IPAddress.Loopback, 0);
                 data = client.EndReceive(ar, ref ep);
                 recvOk = true;
-                AppLogger.Debug("ListenerReceive: " + data.Length + "B from " + ep);
             }
             catch (ObjectDisposedException) { return; }
-            catch (SocketException ex) { AppLogger.Debug("ListenerReceive: SocketException: " + ex.Message); }
+            catch (SocketException) { }
             finally
             {
                 bool stillTracking;
@@ -808,11 +726,7 @@ namespace VRCMicToggle
                     catch (SocketException) { }
                     if (!requeued)
                     {
-                        AppLogger.Warn("ListenerReceive: failed to requeue, listener stopped");
                         lock (_listenerLock) { _tracking = false; _listener = null; _activeListenPort = 0; }
-                        // BUGFIX(B2): BeginReceive callback runs on ThreadPool; marshal UI
-                        // updates back to the UI thread via BeginInvoke to avoid cross-thread
-                        // access to WinForms controls.
                         try
                         {
                             _window.BeginInvoke((MethodInvoker)delegate
@@ -832,7 +746,9 @@ namespace VRCMicToggle
             }
         }
 
-        // ── OSC 数据包解析 ────────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  OSC 数据包解析
+        // ════════════════════════════════════════════════════
 
         private unsafe void ParsePacket(byte[] data, int base0, int start, int end)
         {
@@ -887,7 +803,7 @@ namespace VRCMicToggle
                     if (ok)
                     {
                         bool m = muted;
-                        AppLogger.Debug("ParsePacket: MuteSelf received, value=" + (m ? "true(muted)" : "false(unmuted)") + " typeTag='" + typeTag + "'");
+                        AppLogger.Info("Mic state from UDP: " + (m ? "Muted" : "Unmuted"));
                         _lastUdpUpdateTick = Environment.TickCount;
                         try { _window.BeginInvoke((MethodInvoker)delegate { UpdateMute(m); }); } catch (InvalidOperationException) { }
                     }
@@ -922,22 +838,17 @@ namespace VRCMicToggle
             return v;
         }
 
-        private static unsafe float ReadFloat32(byte[] data, ref int i, int end)
+        private static float ReadFloat32(byte[] data, ref int i, int end)
         {
             if (i + 4 > end) { i = end; return 0f; }
-            int bits;
-            fixed (byte* p = &data[i])
-            {
-                if (BitConverter.IsLittleEndian)
-                    bits = (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3];
-                else
-                    bits = (p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
-            }
+            int bits = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3];
             i += 4;
-            return *(float*)&bits;
+            return BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
         }
 
-        // ── UI 状态更新 ──────────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  UI 状态更新
+        // ════════════════════════════════════════════════════
 
         private void UpdateMute(bool muted)
         {
@@ -971,11 +882,12 @@ namespace VRCMicToggle
             }
         }
 
-        // ── 图标渲染 / 缓存 ──────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  图标渲染 / 缓存
+        // ════════════════════════════════════════════════════
 
         private void BuildIconCache()
         {
-            AppLogger.Debug("BuildIconCache: rebuilding icons (unknown=" + _config.UnknownColor + " muted=" + _config.MutedColor + " unmuted=" + _config.UnmutedColor + " slash=" + _config.SlashColor + ")");
             Icon oldUnknown = _cachedUnknown;
             Icon oldMuted = _cachedMuted;
             Icon oldUnmuted = _cachedUnmuted;
@@ -983,9 +895,6 @@ namespace VRCMicToggle
             IntPtr hOldMuted = _hMuted;
             IntPtr hOldUnmuted = _hUnmuted;
 
-            // Use locals so we can atomically swap them in only after all three
-            // icons are successfully built. If anything throws mid-way we must
-            // release any Bitmaps / HICONs we already created to avoid GDI leaks.
             Icon newUnknown = null, newMuted = null, newUnmuted = null;
             IntPtr hNewUnknown = IntPtr.Zero, hNewMuted = IntPtr.Zero, hNewUnmuted = IntPtr.Zero;
             try
@@ -1011,7 +920,6 @@ namespace VRCMicToggle
                 newUnmuted = Icon.FromHandle(hNewUnmuted);
                 bmp.Dispose();
 
-                // All three succeeded — atomic swap.
                 _cachedUnknown = newUnknown;
                 _cachedMuted = newMuted;
                 _cachedUnmuted = newUnmuted;
@@ -1026,7 +934,6 @@ namespace VRCMicToggle
             }
             catch
             {
-                // Roll back any partially-created resources to avoid GDI leaks.
                 if (newUnknown != null) { try { newUnknown.Dispose(); } catch (InvalidOperationException) { } }
                 if (newMuted != null) { try { newMuted.Dispose(); } catch (InvalidOperationException) { } }
                 if (newUnmuted != null) { try { newUnmuted.Dispose(); } catch (InvalidOperationException) { } }
@@ -1036,7 +943,6 @@ namespace VRCMicToggle
                 throw;
             }
 
-            // Dispose the OLD handles/icons only after the new ones are in place.
             if (oldUnknown != null) { try { oldUnknown.Dispose(); } catch (InvalidOperationException) { } }
             if (oldMuted != null) { try { oldMuted.Dispose(); } catch (InvalidOperationException) { } }
             if (oldUnmuted != null) { try { oldUnmuted.Dispose(); } catch (InvalidOperationException) { } }
@@ -1055,12 +961,9 @@ namespace VRCMicToggle
             if (_hUnmuted != IntPtr.Zero) { DestroyIcon(_hUnmuted); _hUnmuted = IntPtr.Zero; }
         }
 
-        private IconState _currentIconState = (IconState)(-1);
-
         private void SetIcon(IconState state)
         {
             if (state == _currentIconState) return;
-            AppLogger.Debug("SetIcon: " + _currentIconState + " -> " + state);
             _currentIconState = state;
             if (_notify == null) return;
             switch (state)
@@ -1128,17 +1031,18 @@ namespace VRCMicToggle
             try { _notify.ShowBalloonTip(BalloonTipDurationMs, "VRCMic", msg, ToolTipIcon.Info); } catch (InvalidOperationException) { }
         }
 
-        // ── 开机自启 / 退出 ──────────────────────────────
+        // ════════════════════════════════════════════════════
+        //  开机自启 / 退出
+        // ════════════════════════════════════════════════════
 
         private void SetStartup(bool enable)
         {
-            AppLogger.Debug("SetStartup: " + enable);
             try
             {
                 const string key = @"Software\Microsoft\Windows\CurrentVersion\Run";
-                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(key, true))
+                using (Microsoft.Win32.RegistryKey rk = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(key, true))
                 {
-                    if (rk == null) { AppLogger.Warn("SetStartup: registry key not found"); return; }
+                    if (rk == null) return;
                     if (enable) rk.SetValue("VRCMicToggle", Application.ExecutablePath);
                     else rk.DeleteValue("VRCMicToggle", false);
                     AppLogger.Info("Startup " + (enable ? "enabled" : "disabled"));
@@ -1150,576 +1054,9 @@ namespace VRCMicToggle
 
         private void ExitApp()
         {
-            AppLogger.Info("ExitApp: shutting down");
+            AppLogger.Info("=== VRCMicToggle exiting ===");
             Dispose(true);
             Application.Exit();
-            AppLogger.Info("=== VRCMicToggle exited ===");
-        }
-
-        // ── 内部窗口：隐藏消息窗口（接收热键消息）────────
-
-        private class HotkeyWindow : Form
-        {
-            public event Action HotkeyPressed;
-
-            public HotkeyWindow()
-            {
-                ShowInTaskbar = false;
-                FormBorderStyle = FormBorderStyle.None;
-                Opacity = 0;
-                Text = "VRCMicToggleWindow";
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                if (m.Msg == WM_HOTKEY)
-                {
-                    if ((int)m.WParam == HOTKEY_ID)
-                    {
-                        Action h = HotkeyPressed;
-                        if (h != null) h();
-                    }
-                }
-                base.WndProc(ref m);
-            }
-        }
-
-        // ── 内部窗口：快捷键捕获对话框 ───────────────────
-
-        private class HotkeyCaptureForm : Form
-        {
-            public uint Key;
-            public uint Modifiers;
-
-            private readonly IntPtr _targetHandle;
-            private uint _capturedMods;
-            private Keys _capturedKey;
-            private bool _hasMainKey;
-
-            private Label _comboLabel;
-
-            public HotkeyCaptureForm(IntPtr targetHandle)
-            {
-                _targetHandle = targetHandle;
-                BuildUi();
-            }
-
-            // ── UI construction ──────────────────────────────
-
-            private void BuildUi()
-            {
-                Text = "设置你的快捷键喵";
-                FormBorderStyle = FormBorderStyle.FixedDialog;
-                MaximizeBox = false;
-                MinimizeBox = false;
-                StartPosition = FormStartPosition.CenterScreen;
-                ClientSize = new Size(400, 170);
-                KeyPreview = true;
-                ShowInTaskbar = false;
-                Font = new Font("Segoe UI", 9f);
-
-                // Real-time combo display
-                _comboLabel = new Label
-                {
-                    Text = "当前组合：(等待输入)",
-                    Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
-                    Location = new Point(10, 14),
-                    Size = new Size(380, 36),
-                    TextAlign = ContentAlignment.MiddleCenter
-                };
-                Controls.Add(_comboLabel);
-
-                // Hint text
-                var hint = new Label
-                {
-                    Text = "按下组合后松开即可锁定\n按 Enter 确认 / Esc 清除",
-                    Location = new Point(10, 54),
-                    Size = new Size(380, 42),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    ForeColor = Color.FromArgb(128, 128, 128)
-                };
-                Controls.Add(hint);
-
-                // Buttons (centered, 20px gap each)
-                int btnY = 112;
-                var clearBtn = ColorUtil.MakeButton("清除", OnClear, false, false, Color.Black);
-                var confirmBtn = ColorUtil.MakeButton("确认", OnConfirm, true, false, Color.Black);
-                var cancelBtn = ColorUtil.MakeButton("取消", OnCancel, false, false, Color.Black);
-
-                int gap = 20;
-                int totalW = clearBtn.Width + confirmBtn.Width + cancelBtn.Width + gap * 2;
-                int x = (ClientSize.Width - totalW) / 2;
-                clearBtn.Location = new Point(x, btnY);
-                confirmBtn.Location = new Point(x + clearBtn.Width + gap, btnY);
-                cancelBtn.Location = new Point(x + clearBtn.Width + gap + confirmBtn.Width + gap, btnY);
-
-                Controls.Add(clearBtn);
-                Controls.Add(confirmBtn);
-                Controls.Add(cancelBtn);
-            }
-
-            // ── Key tracking (capture & lock) ────────────────
-
-            protected override void OnKeyDown(KeyEventArgs e)
-            {
-                e.SuppressKeyPress = true;
-
-                // Enter → confirm captured combo
-                if (e.KeyCode == Keys.Enter)
-                {
-                    if (_hasMainKey) OnConfirm(this, EventArgs.Empty);
-                    return;
-                }
-
-                // Esc → clear capture, or cancel if already clear
-                if (e.KeyCode == Keys.Escape)
-                {
-                    if (_hasMainKey || _capturedMods != 0)
-                    {
-                        ClearCapture();
-                    }
-                    else
-                    {
-                        DialogResult = DialogResult.Cancel;
-                        Close();
-                    }
-                    return;
-                }
-
-                // Read current modifier state (Ctrl/Alt/Shift from event, Win from native API)
-                uint mods = 0;
-                if ((e.Modifiers & Keys.Control) == Keys.Control) mods |= MOD_CONTROL;
-                if ((e.Modifiers & Keys.Alt) == Keys.Alt) mods |= MOD_ALT;
-                if ((e.Modifiers & Keys.Shift) == Keys.Shift) mods |= MOD_SHIFT;
-                bool winHeld = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0
-                            || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
-                if (winHeld) mods |= MOD_WIN;
-
-                // Update captured state
-                _capturedMods = mods;
-                if (!IsModifierKey(e.KeyCode))
-                {
-                    _capturedKey = e.KeyCode;
-                    _hasMainKey = true;
-                }
-
-                RefreshDisplay();
-            }
-
-            protected override void OnKeyUp(KeyEventArgs e)
-            {
-                e.SuppressKeyPress = true;
-                // Do nothing — captured state is locked until new key press
-            }
-
-            // ── Display ──────────────────────────────────────
-
-            private void RefreshDisplay()
-            {
-                var sb = new StringBuilder();
-                if ((_capturedMods & MOD_CONTROL) != 0) sb.Append("Ctrl + ");
-                if ((_capturedMods & MOD_ALT) != 0) sb.Append("Alt + ");
-                if ((_capturedMods & MOD_SHIFT) != 0) sb.Append("Shift + ");
-                if ((_capturedMods & MOD_WIN) != 0) sb.Append("Win + ");
-
-                if (!_hasMainKey)
-                {
-                    sb.Append("(等待主键)");
-                }
-                else
-                {
-                    sb.Append(KeyName((uint)_capturedKey));
-                }
-
-                _comboLabel.Text = "当前组合：" + sb.ToString();
-            }
-
-            // ── Button handlers ──────────────────────────────
-
-            private void OnConfirm(object sender, EventArgs e)
-            {
-                // 1) Must have a main key
-                if (!_hasMainKey)
-                {
-                    ShowMsg("请按一个主键（如字母、数字、F1-F24 等）\n\n不能只用修饰键");
-                    return;
-                }
-
-                // 2) No modifiers → warn user
-                if (_capturedMods == 0)
-                {
-                    var r = MessageBox.Show(this,
-                        "单独使用此键容易与其他程序冲突，确定要使用吗？",
-                        "警告", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                    if (r == DialogResult.No) return;
-                }
-
-                uint vk = (uint)_capturedKey;
-                uint mods = _capturedMods;
-
-                // 3) Conflict pre-detection: try-register → immediately unregister
-                if (!RegisterHotKey(_targetHandle, HOTKEY_ID, mods | MOD_NOREPEAT, vk))
-                {
-                    int err = Marshal.GetLastWin32Error();
-                    ShowMsg("该快捷键已被其他程序占用（错误码 " + err + "）\n\n请更换组合");
-                    return;
-                }
-                UnregisterHotKey(_targetHandle, HOTKEY_ID);
-
-                Key = vk;
-                Modifiers = mods;
-                DialogResult = DialogResult.OK;
-                Close();
-            }
-
-            private void OnClear(object sender, EventArgs e)
-            {
-                ClearCapture();
-            }
-
-            private void ClearCapture()
-            {
-                _capturedMods = 0;
-                _capturedKey = default(Keys);
-                _hasMainKey = false;
-                RefreshDisplay();
-            }
-
-            private void OnCancel(object sender, EventArgs e)
-            {
-                DialogResult = DialogResult.Cancel;
-                Close();
-            }
-
-            // ── Helpers ──────────────────────────────────────
-
-            private void ShowMsg(string text)
-            {
-                MessageBox.Show(this, text, "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-
-            private static bool IsModifierKey(Keys keyCode)
-            {
-                switch (keyCode)
-                {
-                    case Keys.ControlKey:
-                    case Keys.LControlKey:
-                    case Keys.RControlKey:
-                    case Keys.Menu:
-                    case Keys.LMenu:
-                    case Keys.RMenu:
-                    case Keys.ShiftKey:
-                    case Keys.LShiftKey:
-                    case Keys.RShiftKey:
-                    case Keys.LWin:
-                    case Keys.RWin:
-                        return true;
-                    default:
-                        return false;
-                }
-            }
-        }
-    }
-
-    // 配置持久化：快捷键、颜色、自启（AppData/VRCMicToggle/config.txt）
-    internal class Config
-    {
-        public uint HotkeyMods = 0;
-        public uint HotkeyKey = (uint)Keys.Insert;
-        public bool RunOnStartup = false;
-        public string UnknownColor = "#888888";
-        public string MutedColor = "#F48FB1";
-        public string UnmutedColor = "#4FC3F7";
-        public string SlashColor = "#ECECEC";
-
-        private static string Dir
-        {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCMicToggle"); }
-        }
-
-        private static string FilePath
-        {
-            get { return Path.Combine(Dir, "config.txt"); }
-        }
-
-        public static bool Exists()
-        {
-            return File.Exists(FilePath);
-        }
-
-        public static Config Load()
-        {
-            Config c = new Config();
-            AppLogger.Debug("Config.Load: loading from " + FilePath);
-            try
-            {
-                if (File.Exists(FilePath))
-                {
-                    foreach (string line in File.ReadAllLines(FilePath))
-                    {
-                        int eq = line.IndexOf('=');
-                        if (eq <= 0) continue;
-                        string k = line.Substring(0, eq).Trim();
-                        string v = line.Substring(eq + 1).Trim();
-                        switch (k)
-                        {
-                            case "HotkeyMods": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyMods); break;
-                            case "HotkeyKey": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyKey); break;
-                            case "RunOnStartup": bool.TryParse(v, out c.RunOnStartup); break;
-                            case "UnknownColor": c.UnknownColor = v; break;
-                            case "MutedColor": c.MutedColor = v; break;
-                            case "UnmutedColor": c.UnmutedColor = v; break;
-                            case "SlashColor": c.SlashColor = v; break;
-                        }
-                    }
-                    AppLogger.Debug("Config.Load: loaded successfully (HotkeyMods=" + c.HotkeyMods + " HotkeyKey=" + c.HotkeyKey + " RunOnStartup=" + c.RunOnStartup + ")");
-                }
-                else
-                {
-                    AppLogger.Debug("Config.Load: config file not found, using defaults");
-                }
-            }
-            catch (IOException ex) { AppLogger.Log("Config.Load", ex); }
-            catch (UnauthorizedAccessException ex) { AppLogger.Log("Config.Load", ex); }
-            return c;
-        }
-
-        public void Save()
-        {
-            if (string.IsNullOrEmpty(UnknownColor)) UnknownColor = "#888888";
-            if (string.IsNullOrEmpty(MutedColor)) MutedColor = "#F48FB1";
-            if (string.IsNullOrEmpty(UnmutedColor)) UnmutedColor = "#4FC3F7";
-            if (string.IsNullOrEmpty(SlashColor)) SlashColor = "#ECECEC";
-            AppLogger.Debug("Config.Save: saving to " + FilePath);
-            try
-            {
-                string d = Dir;
-                if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-
-                string content =
-                    "HotkeyMods=" + HotkeyMods.ToString(CultureInfo.InvariantCulture) + "\r\n" +
-                    "HotkeyKey=" + HotkeyKey.ToString(CultureInfo.InvariantCulture) + "\r\n" +
-                    "RunOnStartup=" + RunOnStartup + "\r\n" +
-                    "UnknownColor=" + UnknownColor + "\r\n" +
-                    "MutedColor=" + MutedColor + "\r\n" +
-                    "UnmutedColor=" + UnmutedColor + "\r\n" +
-                    "SlashColor=" + SlashColor + "\r\n";
-
-                // BUGFIX(B6): Write to a temp file first and atomically replace
-                // the target. Without this, a crash during File.WriteAllText
-                // could leave config.txt truncated, losing user settings.
-                string tmp = FilePath + ".tmp";
-                File.WriteAllText(tmp, content);
-                if (File.Exists(FilePath))
-                {
-                    string bak = FilePath + ".bak";
-                    if (File.Exists(bak)) File.Delete(bak);
-                    File.Replace(tmp, FilePath, bak);
-                }
-                else
-                {
-                    File.Move(tmp, FilePath);
-                }
-                AppLogger.Debug("Config.Save: saved successfully");
-            }
-            catch (IOException ex) { AppLogger.Log("Config.Save", ex); }
-            catch (UnauthorizedAccessException ex) { AppLogger.Log("Config.Save", ex); }
-        }
-    }
-
-    // 日志工具：error.log（Release）+ debug.log（DEBUG only），自动轮转
-    internal static class AppLogger
-    {
-        private static readonly string LogPath;
-        private static readonly string DebugLogPath;
-        private const int MaxLogSizeBytes = 1024 * 1024;
-
-        static AppLogger()
-        {
-            string dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "VRCMicToggle");
-            LogPath = Path.Combine(dir, "error.log");
-            DebugLogPath = Path.Combine(dir, "debug.log");
-        }
-
-        [Conditional("DEBUG")]
-        public static void Debug(string msg)
-        {
-            WriteLog(DebugLogPath, "DEBUG", msg);
-        }
-
-        public static void Info(string msg)
-        {
-            // BUGFIX(B7): Operational messages always go to error.log so they
-            // are preserved in Release builds. Only mirror to debug.log under
-            // DEBUG where that file is actively being tailed by developers.
-            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
-                + " [INFO] " + msg + Environment.NewLine;
-            try
-            {
-                string dir = Path.GetDirectoryName(LogPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(LogPath, line);
-            }
-            catch (Exception) { }
-#if DEBUG
-            try { File.AppendAllText(DebugLogPath, line); } catch (Exception) { }
-#endif
-        }
-
-        public static void Warn(string msg)
-        {
-            // See Info() above for the rationale.
-            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
-                + " [WARN] " + msg + Environment.NewLine;
-            try
-            {
-                string dir = Path.GetDirectoryName(LogPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(LogPath, line);
-            }
-            catch (Exception) { }
-#if DEBUG
-            try { File.AppendAllText(DebugLogPath, line); } catch (Exception) { }
-#endif
-        }
-
-        public static void Log(string context, Exception ex)
-        {
-            string errLine = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
-                + " [ERROR] [" + context + "] " + ex.ToString() + Environment.NewLine;
-            try
-            {
-                string dir = Path.GetDirectoryName(LogPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(LogPath, errLine);
-            }
-            catch (Exception) { }
-#if DEBUG
-            try
-            {
-                string dir = Path.GetDirectoryName(DebugLogPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(DebugLogPath, errLine);
-            }
-            catch (Exception) { }
-#endif
-        }
-
-        private static void WriteLog(string path, string level, string msg)
-        {
-            try
-            {
-                string dir = Path.GetDirectoryName(path);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                try
-                {
-                    if (File.Exists(path) && new FileInfo(path).Length > MaxLogSizeBytes)
-                    {
-                        string backup = path + ".old";
-                        if (File.Exists(backup)) File.Delete(backup);
-                        File.Move(path, backup);
-                    }
-                }
-                catch (Exception) { }
-                File.AppendAllText(path,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) +
-                    " [" + level + "] " + msg + Environment.NewLine);
-            }
-            catch (Exception) { }
-        }
-    }
-
-    // UI 主题：亮/暗模式颜色常量
-    internal sealed class Theme
-    {
-        public Color Bg, Fg, BorderCol, SubFg, InputBg;
-
-        public static Theme Create(bool dark)
-        {
-            Theme t = new Theme();
-            if (dark)
-            {
-                t.Bg = Color.FromArgb(32, 32, 32);
-                t.Fg = Color.FromArgb(240, 240, 240);
-                t.BorderCol = Color.FromArgb(60, 60, 60);
-                t.SubFg = Color.FromArgb(160, 160, 160);
-                t.InputBg = Color.FromArgb(48, 48, 48);
-            }
-            else
-            {
-                t.Bg = Color.FromArgb(250, 250, 250);
-                t.Fg = Color.FromArgb(32, 32, 32);
-                t.BorderCol = Color.FromArgb(220, 220, 220);
-                t.SubFg = Color.FromArgb(120, 120, 120);
-                t.InputBg = Color.FromArgb(255, 255, 255);
-            }
-            return t;
-        }
-    }
-
-    // 颜色/图形工具：Hex 转换、圆角矩形、按钮工厂
-    internal static class ColorUtil
-    {
-        internal const int PrimaryButtonR = 0;
-        internal const int PrimaryButtonG = 120;
-        internal const int PrimaryButtonB = 212;
-
-        internal static Color HexToColor(string hex)
-        {
-            try { return ColorTranslator.FromHtml(hex); }
-            catch (ArgumentException) { return Color.Gray; }
-        }
-
-        internal static GraphicsPath CreateRoundedRect(float x, float y, float w, float h, float r)
-        {
-            GraphicsPath path = new GraphicsPath();
-            path.AddArc(x, y, r * 2, r * 2, 180, 90);
-            path.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
-            path.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
-            path.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
-            path.CloseFigure();
-            return path;
-        }
-
-        internal static Button MakeButton(string text, EventHandler onClick, bool isPrimary, bool darkMode, Color foreColor)
-        {
-            Color back = isPrimary
-                ? Color.FromArgb(PrimaryButtonR, PrimaryButtonG, PrimaryButtonB)
-                : (darkMode ? Color.FromArgb(62, 62, 62) : Color.FromArgb(240, 240, 240));
-            Color fore = isPrimary ? Color.White : foreColor;
-            Button btn = new Button
-            {
-                Text = text,
-                Font = new Font("Segoe UI", 9.5f),
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                MinimumSize = new Size(72, 30),
-                Padding = new Padding(14, 4, 14, 4),
-                Cursor = Cursors.Hand,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = back,
-                ForeColor = fore,
-                TabStop = false
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            btn.FlatAppearance.MouseOverBackColor = isPrimary ? Color.FromArgb(0, 110, 200) : (darkMode ? Color.FromArgb(72, 72, 72) : Color.FromArgb(220, 220, 220));
-            btn.FlatAppearance.MouseDownBackColor = isPrimary ? Color.FromArgb(0, 90, 170) : (darkMode ? Color.FromArgb(52, 52, 52) : Color.FromArgb(200, 200, 200));
-            btn.Click += onClick;
-            return btn;
-        }
-    }
-
-    // 双缓冲 Panel，防止闪烁
-    internal class DbPanel : Panel
-    {
-        public DbPanel()
-        {
-            DoubleBuffered = true;
-            ResizeRedraw = false;
-            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
         }
     }
 }

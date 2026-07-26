@@ -27,6 +27,8 @@ namespace VRCMicToggle
         private Font _consFont;
         private Font _consFontSmall;
 
+        private readonly List<Font> _ownedFonts = new List<Font>();
+
         private static readonly string[] PresetColors = new string[]
         {
             "#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#00FFFF", "#0088FF", "#8800FF", "#FF00FF",
@@ -55,8 +57,7 @@ namespace VRCMicToggle
         private Bitmap _slBitmap;
         private Bitmap _hueBitmap;
         private Font _previewFont;
-        private bool _darkMode;
-        private Color _fg, _bg, _subFg, _borderCol, _inputBg;
+        private bool _darkMode;        private Color _fg, _bg, _subFg, _borderCol, _inputBg;
 
         private bool _slDragging, _hueDragging;
 
@@ -66,16 +67,12 @@ namespace VRCMicToggle
 
         public ColorPickerDialog(string initialColor, bool darkMode)
         {
-            _uiFont = new Font("Segoe UI", 9f);
-            _uiFontBold = new Font("Segoe UI", 9f, FontStyle.Bold);
-            _uiFontSmall = new Font("Segoe UI", 8f);
-            _consFont = new Font("Consolas", 10f);
-            _consFontSmall = new Font("Consolas", 9.5f);
-            // BUGFIX(B5): Pre-create the preview label font in the constructor
-            // instead of lazily inside PreviewPaint. Avoids the risk of the
-            // Font being created on a paint callback and being easy to miss in
-            // the Dispose path.
-            _previewFont = new Font("Segoe UI", 7.5f);
+            _uiFont = TrackFont(new Font("Segoe UI", 9f));
+            _uiFontBold = TrackFont(new Font("Segoe UI", 9f, FontStyle.Bold));
+            _uiFontSmall = TrackFont(new Font("Segoe UI", 8f));
+            _consFont = TrackFont(new Font("Consolas", 10f));
+            _consFontSmall = TrackFont(new Font("Consolas", 9.5f));
+            _previewFont = TrackFont(new Font("Segoe UI", 7.5f));
 
             _darkMode = darkMode;
             ApplyTheme();
@@ -601,17 +598,20 @@ namespace VRCMicToggle
             {
                 if (_slBitmap != null) { _slBitmap.Dispose(); _slBitmap = null; }
                 if (_hueBitmap != null) { _hueBitmap.Dispose(); _hueBitmap = null; }
-                if (_previewFont != null) { _previewFont.Dispose(); _previewFont = null; }
 
-                Font[] fonts = { _uiFont, _uiFontBold, _uiFontSmall, _consFont, _consFontSmall };
-                _uiFont = null; _uiFontBold = null; _uiFontSmall = null;
-                _consFont = null; _consFontSmall = null;
-                for (int i = 0; i < fonts.Length; i++)
+                for (int i = 0; i < _ownedFonts.Count; i++)
                 {
-                    try { if (fonts[i] != null) fonts[i].Dispose(); } catch (Exception) { }
+                    try { _ownedFonts[i].Dispose(); } catch (Exception) { }
                 }
+                _ownedFonts.Clear();
             }
             base.Dispose(disposing);
+        }
+
+        private Font TrackFont(Font f)
+        {
+            _ownedFonts.Add(f);
+            return f;
         }
 
         // ── HSV / RGB / Hex 转换 ────────────────────────

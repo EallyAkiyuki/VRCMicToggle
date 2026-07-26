@@ -140,14 +140,16 @@ Content-Length: 123
 ### 性能优化
 
 - 使用原始 `TcpClient` 而非 `HttpWebRequest`
-- 只读取前 512 字节即可判断是否为 OSCQuery
-- 连接超时设为 300ms，读取超时设为 500ms
-- 缓存端口，避免重复探测
+- 只读取包含 VALUE 和 `]` 的最小数据即停止
+- 连接超时 400ms，读取超时 600ms，写入超时 400ms
+- 缓存已发现的 OSCQuery 端口，避免每次轮询重新探测
 
 ### 状态同步
 
-- 启动时查询一次 `/input/Voice` 获取初始状态
-- 后续通过 UDP 监听 `/input/Voice` 变化实时更新
+- 启动后每 3 秒轮询一次 `/avatar/parameters/MuteSelf` 获取麦克风状态
+- 同时监听 UDP 端口 9001-9003 接收 VRChat 实时推送的 `/avatar/parameters/MuteSelf` 变化
+- UDP 更新优先级高于 OSCQuery 轮询（5 秒内的 UDP 更新不会被轮询覆盖）
+- 注意：不要查询 `/input/Voice`（ACCESS=2，只写），它的 VALUE 始终为 `[false]`，不反映麦克风实际状态
 
 ## 相关资源
 

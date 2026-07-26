@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace VRCMicToggle
 {
@@ -14,14 +13,22 @@ namespace VRCMicToggle
         private const int Pad = 24;
         private const int FormWidth = 448;
         private const int BottomPanelHeight = 56;
+        private const int ColorCount = 4;
+
+        // 索引常量，对应 _colors / _previews / _hexLabels 数组
+        private const int IdxUnknown = 0;
+        private const int IdxMuted = 1;
+        private const int IdxUnmuted = 2;
+        private const int IdxSlash = 3;
 
         private Config _cfg;
         private readonly List<Font> _ownedFonts = new List<Font>();
 
-        private string _unknownColor, _mutedColor, _unmutedColor, _slashColor;
-        private DbPanel _unknownPreview, _mutedPreview, _unmutedPreview, _slashPreview;
-        private Label _unknownHex, _mutedHex, _unmutedHex, _slashHex;
-        private PictureBox _iconUnknown, _iconMuted, _iconUnmuted;
+        private string[] _colors = new string[ColorCount];
+        private DbPanel[] _previews = new DbPanel[ColorCount];
+        private Label[] _hexLabels = new Label[ColorCount];
+        private PictureBox[] _iconPreviews = new PictureBox[3]; // unknown, muted, unmuted
+
         private bool _darkMode;
         private Color _fg, _bg, _borderCol, _subFg;
 
@@ -30,7 +37,7 @@ namespace VRCMicToggle
         public SettingsWindow(Config config)
         {
             _cfg = config;
-            _darkMode = DetectDarkMode();
+            _darkMode = Theme.DetectDarkMode();
             ApplyTheme();
             LoadColors();
             BuildUI();
@@ -46,29 +53,12 @@ namespace VRCMicToggle
             _subFg = t.SubFg;
         }
 
-        private static bool DetectDarkMode()
-        {
-            try
-            {
-                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                {
-                    if (rk != null)
-                    {
-                        object v = rk.GetValue("AppsUseLightTheme");
-                        if (v is int && (int)v == 0) return true;
-                    }
-                }
-            }
-            catch (System.Security.SecurityException) { }
-            return false;
-        }
-
         private void LoadColors()
         {
-            _unknownColor = _cfg.UnknownColor;
-            _mutedColor = _cfg.MutedColor;
-            _unmutedColor = _cfg.UnmutedColor;
-            _slashColor = _cfg.SlashColor;
+            _colors[IdxUnknown] = _cfg.UnknownColor;
+            _colors[IdxMuted] = _cfg.MutedColor;
+            _colors[IdxUnmuted] = _cfg.UnmutedColor;
+            _colors[IdxSlash] = _cfg.SlashColor;
         }
 
         // ── UI 构建 ─────────────────────────────────────
@@ -111,13 +101,10 @@ namespace VRCMicToggle
             y += hint.Height + 22;
 
             string[] labels = { "未知状态", "已静音", "已开麦", "斜杠颜色" };
-            string[] colors = { _unknownColor, _mutedColor, _unmutedColor, _slashColor };
-            DbPanel[] previews = new DbPanel[4];
-            Label[] hexLabels = new Label[4];
-            EventHandler[] actions = { PickUnknown, PickMuted, PickUnmuted, PickSlash };
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < ColorCount; i++)
             {
+                int idx = i; // 闭包捕获
                 Label lbl = new Label
                 {
                     Text = labels[i],
@@ -129,39 +116,30 @@ namespace VRCMicToggle
                 };
                 Controls.Add(lbl);
 
-                previews[i] = new DbPanel
+                _previews[i] = new DbPanel
                 {
                     Size = new Size(36, 36),
                     Location = new Point(pad + 90, y),
                     Cursor = Cursors.Hand,
-                    BackColor = ColorUtil.HexToColor(colors[i])
+                    BackColor = ColorUtil.HexToColor(_colors[i])
                 };
-                previews[i].Paint += ColorSwatchPaint;
-                previews[i].Click += actions[i];
-                Controls.Add(previews[i]);
+                _previews[i].Paint += ColorSwatchPaint;
+                _previews[i].Click += (s, e) => PickColor(idx);
+                Controls.Add(_previews[i]);
 
-                hexLabels[i] = new Label
+                _hexLabels[i] = new Label
                 {
-                    Text = colors[i].ToUpperInvariant(),
+                    Text = _colors[i].ToUpperInvariant(),
                     Font = TrackFont(new Font("Consolas", 9.5f)),
                     ForeColor = _subFg,
                     Location = new Point(pad + 90 + 36 + 14, y + 9),
                     AutoSize = true,
                     TextAlign = ContentAlignment.MiddleLeft
                 };
-                Controls.Add(hexLabels[i]);
+                Controls.Add(_hexLabels[i]);
 
                 y += 46;
             }
-
-            _unknownPreview = previews[0];
-            _mutedPreview = previews[1];
-            _unmutedPreview = previews[2];
-            _slashPreview = previews[3];
-            _unknownHex = hexLabels[0];
-            _mutedHex = hexLabels[1];
-            _unmutedHex = hexLabels[2];
-            _slashHex = hexLabels[3];
 
             y += 12;
             DbPanel divider = new DbPanel
@@ -185,9 +163,11 @@ namespace VRCMicToggle
             y += previewTitle.Height + 16;
 
             int px = pad + 36;
-            _iconUnknown = MakePreviewBox(ref px, y, "未知");
-            _iconMuted = MakePreviewBox(ref px, y, "静音");
-            _iconUnmuted = MakePreviewBox(ref px, y, "开麦");
+            string[] iconLabels = { "未知", "静音", "开麦" };
+            for (int i = 0; i < 3; i++)
+            {
+                _iconPreviews[i] = MakePreviewBox(ref px, y, iconLabels[i]);
+            }
 
             y += 64;
 
@@ -271,50 +251,34 @@ namespace VRCMicToggle
 
         private void UpdatePreviews()
         {
-            _unknownPreview.BackColor = ColorUtil.HexToColor(_unknownColor);
-            _mutedPreview.BackColor = ColorUtil.HexToColor(_mutedColor);
-            _unmutedPreview.BackColor = ColorUtil.HexToColor(_unmutedColor);
-            _slashPreview.BackColor = ColorUtil.HexToColor(_slashColor);
-            _unknownPreview.Invalidate();
-            _mutedPreview.Invalidate();
-            _unmutedPreview.Invalidate();
-            _slashPreview.Invalidate();
+            for (int i = 0; i < ColorCount; i++)
+            {
+                _previews[i].BackColor = ColorUtil.HexToColor(_colors[i]);
+                _previews[i].Invalidate();
+                _hexLabels[i].Text = _colors[i].ToUpperInvariant();
+            }
 
-            _unknownHex.Text = _unknownColor.ToUpperInvariant();
-            _mutedHex.Text = _mutedColor.ToUpperInvariant();
-            _unmutedHex.Text = _unmutedColor.ToUpperInvariant();
-            _slashHex.Text = _slashColor.ToUpperInvariant();
+            Color slashCol = ColorUtil.HexToColor(_colors[IdxSlash]);
 
-            Bitmap bmp;
+            UpdateIconPreview(0, _colors[IdxUnknown], slashCol, false);
+            UpdateIconPreview(1, _colors[IdxMuted], slashCol, true);
+            UpdateIconPreview(2, _colors[IdxUnmuted], slashCol, false);
+        }
 
-            Image old = _iconUnknown.Image;
-            bmp = AppContext.CreateMicIcon(ColorUtil.HexToColor(_unknownColor), ColorUtil.HexToColor(_slashColor), false);
-            _iconUnknown.Image = bmp;
-            if (old != null) old.Dispose();
-
-            old = _iconMuted.Image;
-            bmp = AppContext.CreateMicIcon(ColorUtil.HexToColor(_mutedColor), ColorUtil.HexToColor(_slashColor), true);
-            _iconMuted.Image = bmp;
-            if (old != null) old.Dispose();
-
-            old = _iconUnmuted.Image;
-            bmp = AppContext.CreateMicIcon(ColorUtil.HexToColor(_unmutedColor), ColorUtil.HexToColor(_slashColor), false);
-            _iconUnmuted.Image = bmp;
+        private void UpdateIconPreview(int index, string micColorHex, Color slashCol, bool showSlash)
+        {
+            Image old = _iconPreviews[index].Image;
+            _iconPreviews[index].Image = AppContext.CreateMicIcon(ColorUtil.HexToColor(micColorHex), slashCol, showSlash);
             if (old != null) old.Dispose();
         }
 
-        private void PickUnknown(object sender, EventArgs e) { PickColor(ref _unknownColor); }
-        private void PickMuted(object sender, EventArgs e) { PickColor(ref _mutedColor); }
-        private void PickUnmuted(object sender, EventArgs e) { PickColor(ref _unmutedColor); }
-        private void PickSlash(object sender, EventArgs e) { PickColor(ref _slashColor); }
-
-        private void PickColor(ref string colorHex)
+        private void PickColor(int index)
         {
-            using (ColorPickerDialog dlg = new ColorPickerDialog(colorHex, _darkMode))
+            using (ColorPickerDialog dlg = new ColorPickerDialog(_colors[index], _darkMode))
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    colorHex = dlg.SelectedColorHex;
+                    _colors[index] = dlg.SelectedColorHex;
                     UpdatePreviews();
                 }
             }
@@ -322,10 +286,10 @@ namespace VRCMicToggle
 
         private void OnRestoreDefaults(object sender, EventArgs e)
         {
-            _unknownColor = "#888888";
-            _mutedColor = "#F48FB1";
-            _unmutedColor = "#4FC3F7";
-            _slashColor = "#ECECEC";
+            _colors[IdxUnknown] = "#888888";
+            _colors[IdxMuted] = "#F48FB1";
+            _colors[IdxUnmuted] = "#4FC3F7";
+            _colors[IdxSlash] = "#ECECEC";
             UpdatePreviews();
         }
 
@@ -337,10 +301,10 @@ namespace VRCMicToggle
 
         private void OnSave(object sender, EventArgs e)
         {
-            _cfg.UnknownColor = _unknownColor;
-            _cfg.MutedColor = _mutedColor;
-            _cfg.UnmutedColor = _unmutedColor;
-            _cfg.SlashColor = _slashColor;
+            _cfg.UnknownColor = _colors[IdxUnknown];
+            _cfg.MutedColor = _colors[IdxMuted];
+            _cfg.UnmutedColor = _colors[IdxUnmuted];
+            _cfg.SlashColor = _colors[IdxSlash];
             _cfg.Save();
             DialogResult = DialogResult.OK;
             Close();
@@ -362,23 +326,15 @@ namespace VRCMicToggle
                 }
                 _ownedFonts.Clear();
 
-                // BUGFIX(B4): Detach Image references from PictureBoxes BEFORE
-                // disposing the images. Otherwise base.Dispose will dispose the
-                // PictureBox controls, which dispose their Image a second time
-                // → double-dispose on GDI+ objects.
-                PictureBox[] boxes = { _iconUnknown, _iconMuted, _iconUnmuted };
-                Image[] imgs = new Image[boxes.Length];
-                for (int i = 0; i < boxes.Length; i++)
+                // 先脱离 PictureBox 的 Image 引用再 dispose，防止 base.Dispose 二次释放
+                for (int i = 0; i < _iconPreviews.Length; i++)
                 {
-                    if (boxes[i] != null)
+                    if (_iconPreviews[i] != null)
                     {
-                        imgs[i] = boxes[i].Image;
-                        boxes[i].Image = null;
+                        Image img = _iconPreviews[i].Image;
+                        _iconPreviews[i].Image = null;
+                        if (img != null) { try { img.Dispose(); } catch (Exception) { } }
                     }
-                }
-                for (int i = 0; i < imgs.Length; i++)
-                {
-                    try { if (imgs[i] != null) imgs[i].Dispose(); } catch (Exception) { }
                 }
             }
             base.Dispose(disposing);

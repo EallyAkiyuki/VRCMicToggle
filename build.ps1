@@ -9,7 +9,17 @@ $Configuration = (Get-Culture).TextInfo.ToTitleCase($Configuration)
 
 $outDir = "bin\$Configuration"
 $out = "$outDir\VRCMic.exe"
-$sourceFiles = @("src\Program.cs", "src\SettingsWindow.cs", "src\ColorPickerDialog.cs", "src\AppVersion.cs")
+$sourceFiles = @(
+    "src\Program.cs",
+    "src\SettingsWindow.cs",
+    "src\ColorPickerDialog.cs",
+    "src\AppVersion.cs",
+    "src\AppLogger.cs",
+    "src\Config.cs",
+    "src\Theme.cs",
+    "src\Controls.cs",
+    "src\HotkeyCaptureForm.cs"
+)
 
 if (-not (Test-Path $outDir)) {
     New-Item -ItemType Directory -Path $outDir -Force | Out-Null

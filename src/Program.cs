@@ -1,3 +1,4 @@
+// Program.cs — 入口、AppContext（托盘/热键/OSC）、Config、AppLogger、Theme、ColorUtil、DbPanel
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -14,6 +15,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 namespace VRCMicToggle
 {
+    // 程序入口：DPI 感知 + 单实例互斥
     internal static class Program
     {
         [DllImport("user32.dll")]
@@ -52,8 +54,11 @@ namespace VRCMicToggle
         }
     }
 
+    // 核心上下文：系统托盘、全局热键、OSC 通信、状态轮询
     internal sealed class AppContext : ApplicationContext
     {
+        // ── P/Invoke ──────────────────────────────────────
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -65,6 +70,8 @@ namespace VRCMicToggle
 
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
+
+        // ── 常量定义 ──────────────────────────────────────
 
         private const int VK_LWIN = 0x5B;
         private const int VK_RWIN = 0x5C;
@@ -92,6 +99,8 @@ namespace VRCMicToggle
         // OscPostToggleDelayMs removed: sync timer after toggle was removed because
         // querying /input/Voice via OSCQuery returns the pulse value (0 after release),
         // not the actual mic state, causing the icon to incorrectly revert.
+
+        // ── 字段 ──────────────────────────────────────────
 
         private NotifyIcon _notify;
         private ToolStripMenuItem _statusItem;
@@ -128,6 +137,8 @@ namespace VRCMicToggle
         private static readonly KeysConverter SharedKeysConverter = new KeysConverter();
 
         private enum IconState { Unknown, Muted, Unmuted }
+
+        // ── 构造 / 初始化 ─────────────────────────────────
 
         public AppContext()
         {
@@ -423,6 +434,8 @@ namespace VRCMicToggle
             return ports;
         }
 
+        // ── 资源释放 ──────────────────────────────────────
+
         protected override void Dispose(bool disposing)
         {
             if (disposing && !_disposed)
@@ -453,6 +466,8 @@ namespace VRCMicToggle
             }
             base.Dispose(disposing);
         }
+
+        // ── 系统托盘 / 右键菜单 ────────────────────────────
 
         private void BuildTray()
         {
@@ -517,6 +532,8 @@ namespace VRCMicToggle
                 "双击任务栏图标可快速切换麦克风状态~",
                 "关于", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+
+        // ── 快捷键管理 ────────────────────────────────────
 
         private void SetHotkeyDialog()
         {
@@ -615,6 +632,8 @@ namespace VRCMicToggle
             }
         }
 
+        // ── OSC 发送 / 编码 ───────────────────────────────
+
         private void OnHotkeyPressed()
         {
             AppLogger.Debug("OnHotkeyPressed: sending OSC toggle to 127.0.0.1:" + VrcPort);
@@ -673,6 +692,8 @@ namespace VRCMicToggle
             int pad = (4 - ((b.Length + 1) % 4)) % 4;
             for (int i = 0; i < pad; i++) ms.WriteByte(0);
         }
+
+        // ── UDP 监听（接收 VRChat 的 MuteSelf 广播）────────
 
         private void StartListener()
         {
@@ -811,6 +832,8 @@ namespace VRCMicToggle
             }
         }
 
+        // ── OSC 数据包解析 ────────────────────────────────
+
         private unsafe void ParsePacket(byte[] data, int base0, int start, int end)
         {
             const int MAX_DEPTH = ParseMaxDepth;
@@ -914,6 +937,8 @@ namespace VRCMicToggle
             return *(float*)&bits;
         }
 
+        // ── UI 状态更新 ──────────────────────────────────
+
         private void UpdateMute(bool muted)
         {
             if (_muted.HasValue && _muted.Value == muted) return;
@@ -945,6 +970,8 @@ namespace VRCMicToggle
                 _notify.Text = tip;
             }
         }
+
+        // ── 图标渲染 / 缓存 ──────────────────────────────
 
         private void BuildIconCache()
         {
@@ -1101,6 +1128,8 @@ namespace VRCMicToggle
             try { _notify.ShowBalloonTip(BalloonTipDurationMs, "VRCMic", msg, ToolTipIcon.Info); } catch (InvalidOperationException) { }
         }
 
+        // ── 开机自启 / 退出 ──────────────────────────────
+
         private void SetStartup(bool enable)
         {
             AppLogger.Debug("SetStartup: " + enable);
@@ -1127,6 +1156,8 @@ namespace VRCMicToggle
             AppLogger.Info("=== VRCMicToggle exited ===");
         }
 
+        // ── 内部窗口：隐藏消息窗口（接收热键消息）────────
+
         private class HotkeyWindow : Form
         {
             public event Action HotkeyPressed;
@@ -1152,6 +1183,8 @@ namespace VRCMicToggle
                 base.WndProc(ref m);
             }
         }
+
+        // ── 内部窗口：快捷键捕获对话框 ───────────────────
 
         private class HotkeyCaptureForm : Form
         {
@@ -1389,6 +1422,7 @@ namespace VRCMicToggle
         }
     }
 
+    // 配置持久化：快捷键、颜色、自启（AppData/VRCMicToggle/config.txt）
     internal class Config
     {
         public uint HotkeyMods = 0;
@@ -1494,6 +1528,7 @@ namespace VRCMicToggle
         }
     }
 
+    // 日志工具：error.log（Release）+ debug.log（DEBUG only），自动轮转
     internal static class AppLogger
     {
         private static readonly string LogPath;
@@ -1597,6 +1632,7 @@ namespace VRCMicToggle
         }
     }
 
+    // UI 主题：亮/暗模式颜色常量
     internal sealed class Theme
     {
         public Color Bg, Fg, BorderCol, SubFg, InputBg;
@@ -1624,6 +1660,7 @@ namespace VRCMicToggle
         }
     }
 
+    // 颜色/图形工具：Hex 转换、圆角矩形、按钮工厂
     internal static class ColorUtil
     {
         internal const int PrimaryButtonR = 0;
@@ -1675,6 +1712,7 @@ namespace VRCMicToggle
         }
     }
 
+    // 双缓冲 Panel，防止闪烁
     internal class DbPanel : Panel
     {
         public DbPanel()

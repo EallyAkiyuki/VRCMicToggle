@@ -1,3 +1,4 @@
+// SettingsWindow.cs — 图标颜色自定义设置窗口
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -7,6 +8,7 @@ using Microsoft.Win32;
 
 namespace VRCMicToggle
 {
+    // 颜色设置窗口：未知/静音/开麦/斜杠四色自定义，含图标预览
     internal sealed class SettingsWindow : Form
     {
         private const int Pad = 24;
@@ -22,6 +24,8 @@ namespace VRCMicToggle
         private PictureBox _iconUnknown, _iconMuted, _iconUnmuted;
         private bool _darkMode;
         private Color _fg, _bg, _borderCol, _subFg;
+
+        // ── 构造 / 主题 / 颜色加载 ──────────────────────
 
         public SettingsWindow(Config config)
         {
@@ -66,6 +70,8 @@ namespace VRCMicToggle
             _unmutedColor = _cfg.UnmutedColor;
             _slashColor = _cfg.SlashColor;
         }
+
+        // ── UI 构建 ─────────────────────────────────────
 
         private void BuildUI()
         {
@@ -215,6 +221,8 @@ namespace VRCMicToggle
 
             ClientSize = new Size(FormWidth, y + BottomPanelHeight);
         }
+
+        // ── 颜色选择 / 预览 / 事件处理 ──────────────────
 
         private void ColorSwatchPaint(object sender, PaintEventArgs e)
         {

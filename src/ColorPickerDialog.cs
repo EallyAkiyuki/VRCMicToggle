@@ -1,3 +1,4 @@
+// ColorPickerDialog.cs — HSV 颜色选择器（含预设/最近色板）
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -8,6 +9,7 @@ using Microsoft.Win32;
 
 namespace VRCMicToggle
 {
+    // HSV 颜色选择器：色相条 + 饱和度/亮度面板 + 预设/最近色板
     internal sealed class ColorPickerDialog : Form
     {
         private const string RegKey = @"Software\VRCMicToggle\RecentColors";
@@ -59,6 +61,8 @@ namespace VRCMicToggle
         private bool _slDragging, _hueDragging;
 
         public string SelectedColorHex { get; private set; }
+
+        // ── 构造 / 主题 ─────────────────────────────────
 
         public ColorPickerDialog(string initialColor, bool darkMode)
         {
@@ -307,6 +311,8 @@ namespace VRCMicToggle
         {
             return ColorUtil.MakeButton(text, onClick, isPrimary, _darkMode, _fg);
         }
+
+        // ── 绘制（SL面板 / 色相条 / 预览 / 色板）────────
 
         private void SlPanelPaint(object sender, PaintEventArgs e)
         {
@@ -608,6 +614,8 @@ namespace VRCMicToggle
             base.Dispose(disposing);
         }
 
+        // ── HSV / RGB / Hex 转换 ────────────────────────
+
         private static Color HsvToRgb(double h, double s, double v)
         {
             h = h % 360;
@@ -659,6 +667,8 @@ namespace VRCMicToggle
                 h = 0; s = 0; v = 1.0;
             }
         }
+
+        // ── 最近颜色持久化（注册表）──────────────────────
 
         private static List<string> LoadRecentColors()
         {

@@ -1,3 +1,4 @@
+// AppVersion.cs — 集中管理版本号，修改后需同步 Git tag + Release
 namespace VRCMicToggle
 {
     /// <summary>

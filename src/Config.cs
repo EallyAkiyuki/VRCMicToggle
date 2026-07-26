@@ -16,6 +16,18 @@ namespace VRCMicToggle
         public string UnmutedColor = "#4FC3F7";
         public string SlashColor = "#ECECEC";
 
+        private static bool IsValidHexColor(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length != 7 || s[0] != '#') return false;
+            for (int i = 1; i < 7; i++)
+            {
+                char c = s[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')))
+                    return false;
+            }
+            return true;
+        }
+
         private static string Dir
         {
             get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCMicToggle"); }
@@ -37,9 +49,11 @@ namespace VRCMicToggle
             AppLogger.Debug("Config.Load: loading from " + FilePath);
             try
             {
-                if (File.Exists(FilePath))
+                // 直接用 StreamReader 读取，避免 File.Exists + ReadAllLines 的双重 IO 和 TOCTOU 竞态
+                using (StreamReader reader = new StreamReader(FilePath))
                 {
-                    foreach (string line in File.ReadAllLines(FilePath))
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
                     {
                         int eq = line.IndexOf('=');
                         if (eq <= 0) continue;
@@ -50,15 +64,16 @@ namespace VRCMicToggle
                             case "HotkeyMods": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyMods); break;
                             case "HotkeyKey": uint.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out c.HotkeyKey); break;
                             case "RunOnStartup": bool.TryParse(v, out c.RunOnStartup); break;
-                            case "UnknownColor": c.UnknownColor = v; break;
-                            case "MutedColor": c.MutedColor = v; break;
-                            case "UnmutedColor": c.UnmutedColor = v; break;
-                            case "SlashColor": c.SlashColor = v; break;
+                            case "UnknownColor": if (IsValidHexColor(v)) c.UnknownColor = v; break;
+                            case "MutedColor": if (IsValidHexColor(v)) c.MutedColor = v; break;
+                            case "UnmutedColor": if (IsValidHexColor(v)) c.UnmutedColor = v; break;
+                            case "SlashColor": if (IsValidHexColor(v)) c.SlashColor = v; break;
                         }
                     }
-                    AppLogger.Debug("Config loaded: HotkeyMods=" + c.HotkeyMods + " HotkeyKey=" + c.HotkeyKey + " RunOnStartup=" + c.RunOnStartup);
                 }
+                AppLogger.Debug("Config loaded: HotkeyMods=" + c.HotkeyMods + " HotkeyKey=" + c.HotkeyKey + " RunOnStartup=" + c.RunOnStartup);
             }
+            catch (FileNotFoundException) { /* 首次运行，使用默认值 */ }
             catch (IOException ex) { AppLogger.Log("Config.Load", ex); }
             catch (UnauthorizedAccessException ex) { AppLogger.Log("Config.Load", ex); }
             return c;

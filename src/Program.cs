@@ -51,16 +51,16 @@ namespace VRCMicToggle
         // ── P/Invoke ──────────────────────────────────────
 
         [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        internal static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
         [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr handle);
 
         [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
+        internal static extern short GetAsyncKeyState(int vKey);
 
         [DllImport("iphlpapi.dll", SetLastError = true)]
         private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, int ulReserved);
@@ -182,7 +182,8 @@ namespace VRCMicToggle
             _firstPoll = false;
             try
             {
-                bool? mic = QueryMicStateUnified();
+                HashSet<int> vrcPids = GetVrcPids();
+                bool? mic = QueryMicStateUnified(vrcPids);
                 if (mic.HasValue)
                 {
                     _oscNoResponseCount = 0;
@@ -197,7 +198,7 @@ namespace VRCMicToggle
                     return;
                 }
 
-                bool vrcRunning = IsVrcRunning();
+                bool vrcRunning = vrcPids.Count > 0;
                 _oscNoResponseCount++;
                 int noResp = _oscNoResponseCount;
                 try
@@ -234,7 +235,7 @@ namespace VRCMicToggle
         }
 
         // 统一的麦克风状态查询：优先缓存端口，失败则枚举 VRChat TCP 端口逐一尝试
-        private bool? QueryMicStateUnified()
+        private bool? QueryMicStateUnified(HashSet<int> vrcPids)
         {
             int cached = _cachedOscQueryPort;
             if (cached > 0)
@@ -244,7 +245,7 @@ namespace VRCMicToggle
                 _cachedOscQueryPort = 0;
             }
 
-            List<int> ports = GetVrcTcpPorts();
+            List<int> ports = GetVrcTcpPorts(vrcPids);
             if (ports.Count == 0) return null;
             foreach (int port in ports)
             {
@@ -318,10 +319,9 @@ namespace VRCMicToggle
         }
 
         // 枚举 VRChat 进程的所有 TCP LISTENING 端口
-        private static List<int> GetVrcTcpPorts()
+        private static List<int> GetVrcTcpPorts(HashSet<int> vrcPids)
         {
             List<int> ports = new List<int>();
-            HashSet<int> vrcPids = GetVrcPids();
             if (vrcPids.Count == 0) return ports;
 
             int size = 0;
@@ -362,18 +362,6 @@ namespace VRCMicToggle
             }
             catch (Exception) { }
             return pids;
-        }
-
-        private static bool IsVrcRunning()
-        {
-            try
-            {
-                Process[] procs = Process.GetProcessesByName("VRChat");
-                bool running = procs.Length > 0;
-                for (int i = 0; i < procs.Length; i++) procs[i].Dispose();
-                return running;
-            }
-            catch (Exception) { return false; }
         }
 
         // ════════════════════════════════════════════════════
@@ -838,12 +826,18 @@ namespace VRCMicToggle
             return v;
         }
 
-        private static float ReadFloat32(byte[] data, ref int i, int end)
+        private static unsafe float ReadFloat32(byte[] data, ref int i, int end)
         {
             if (i + 4 > end) { i = end; return 0f; }
-            int bits = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3];
+            // OSC 数据为大端序，x86/x64 为小端序，需字节翻转后按 float 读取
+            // 直接写入临时栈上 4 字节再强转 float，避免 BitConverter.GetBytes 的堆分配
+            byte* buf = stackalloc byte[4];
+            buf[0] = data[i + 3]; // 小端：低字节在前
+            buf[1] = data[i + 2];
+            buf[2] = data[i + 1];
+            buf[3] = data[i + 0]; // 大端：高字节在前
             i += 4;
-            return BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
+            return *(float*)buf;
         }
 
         // ════════════════════════════════════════════════════

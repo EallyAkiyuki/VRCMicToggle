@@ -76,6 +76,8 @@ namespace VRCMicToggle
     internal class HotkeyWindow : Form
     {
         private const int WM_HOTKEY = 0x0312;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
 
         public event Action HotkeyPressed;
 
@@ -85,6 +87,19 @@ namespace VRCMicToggle
             FormBorderStyle = FormBorderStyle.None;
             Opacity = 0;
             Text = "VRCMicToggleWindow";
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                // 工具窗口：不显示在任务栏和 Alt-Tab
+                cp.ExStyle |= WS_EX_TOOLWINDOW;
+                // 不激活：窗口不会抢夺焦点
+                cp.ExStyle |= WS_EX_NOACTIVATE;
+                return cp;
+            }
         }
 
         protected override void WndProc(ref Message m)

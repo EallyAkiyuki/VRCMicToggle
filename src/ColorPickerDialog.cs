@@ -83,9 +83,10 @@ namespace VRCMicToggle
             _recentColorsParsed = ParseColors(_recentColors);
             if (_presetColorsParsed == null)
             {
-                _presetColorsParsed = new Color[PresetColors.Length];
+                Color[] parsed = new Color[PresetColors.Length];
                 for (int i = 0; i < PresetColors.Length; i++)
-                    _presetColorsParsed[i] = ColorUtil.HexToColor(PresetColors[i]);
+                    parsed[i] = ColorUtil.HexToColor(PresetColors[i]);
+                System.Threading.Interlocked.CompareExchange(ref _presetColorsParsed, parsed, null);
             }
             BuildUI();
             UpdateFromHsv();

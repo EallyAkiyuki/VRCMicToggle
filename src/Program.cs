@@ -35,7 +35,12 @@ namespace VRCMicToggle
                 if (!createdNew)
                 {
                     AppLogger.Warn("Another instance is already running");
-                    MessageBox.Show("VRCMic已在运行，新实例即将退出~", "VRCMic", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // 读取用户语言偏好，使多实例提示正确本地化
+                    if (Config.Exists())
+                    {
+                        try { Lang.SetLanguage(Config.Load().Language); } catch (Exception) { }
+                    }
+                    MessageBox.Show(Lang.MsgAlreadyRunning, "VRCMic", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 Application.EnableVisualStyles();
@@ -99,6 +104,10 @@ namespace VRCMicToggle
         private NotifyIcon _notify;
         private ToolStripMenuItem _statusItem;
         private ToolStripMenuItem _startupItem;
+        private ToolStripMenuItem _langZhCn;
+        private ToolStripMenuItem _langZhTw;
+        private ToolStripMenuItem _langJa;
+        private ToolStripMenuItem _langEn;
         private HotkeyWindow _window;
         private UdpClient _sender;
         private UdpClient _listener;
@@ -140,6 +149,7 @@ namespace VRCMicToggle
         public AppContext()
         {
             _config = Config.Load();
+            Lang.SetLanguage(_config.Language);
             _muted = null;
 
             _sender = new UdpClient();
@@ -163,7 +173,7 @@ namespace VRCMicToggle
                 SetHotkeyDialog();
             }
 
-            ShowTip("VRC麦克风切换工具已启动。快捷键：" + _cachedHotkeyDisplay);
+                ShowTip(Lang.MsgStartupTip + _cachedHotkeyDisplay);
 
             _oscPollTimer = new System.Threading.Timer(_ => PollOscState(), null, 2000, OscPollIntervalMs);
             lock (_pendingTimers) { _pendingTimers.Add(_oscPollTimer); }
@@ -208,11 +218,8 @@ namespace VRCMicToggle
                         if (firstPoll && vrcRunning)
                         {
                             MessageBox.Show(
-                                "VRChat已启动 但OSC未开启或VRC未响应\n\n" +
-                                "请检查：\n" +
-                                "1. VRChat 正常运行\n" +
-                                "2. 在 VRChat 菜单中打开OSC（圆盘菜单>选项>OSC>开启）",
-                                "OSC 未连接", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                Lang.OscNotConnectedBody,
+                                Lang.OscNotConnectedTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         }
                         if (noResp >= 2)
                         {
@@ -421,13 +428,13 @@ namespace VRCMicToggle
             _statusItem = new ToolStripMenuItem();
             _statusItem.Click += (s, e) => OnHotkeyPressed();
 
-            ToolStripMenuItem setHk = new ToolStripMenuItem("快捷键设置");
+            ToolStripMenuItem setHk = new ToolStripMenuItem(Lang.MenuHotkeySettings);
             setHk.Click += (s, e) => SetHotkeyDialog();
 
-            ToolStripMenuItem setColor = new ToolStripMenuItem("图标颜色设置");
+            ToolStripMenuItem setColor = new ToolStripMenuItem(Lang.MenuColorSettings);
             setColor.Click += (s, e) => OpenColorSettings();
 
-            _startupItem = new ToolStripMenuItem("开机自启");
+            _startupItem = new ToolStripMenuItem(Lang.MenuStartup);
             _startupItem.CheckOnClick = true;
             _startupItem.Checked = _config.RunOnStartup;
             _startupItem.CheckedChanged += (s, e) =>
@@ -437,33 +444,38 @@ namespace VRCMicToggle
                 SetStartup(_config.RunOnStartup);
             };
 
-            ToolStripMenuItem about = new ToolStripMenuItem("关于 / 帮助");
+            // Language submenu
+            ToolStripMenuItem langMenu = new ToolStripMenuItem(Lang.MenuLanguage);
+            _langZhCn = new ToolStripMenuItem(Lang.LangNameZhCn);
+            _langZhCn.Click += (s, e) => OnLanguageChanged(LangId.ZH_CN);
+            _langZhTw = new ToolStripMenuItem(Lang.LangNameZhTw);
+            _langZhTw.Click += (s, e) => OnLanguageChanged(LangId.ZH_TW);
+            _langJa = new ToolStripMenuItem(Lang.LangNameJa);
+            _langJa.Click += (s, e) => OnLanguageChanged(LangId.JA);
+            _langEn = new ToolStripMenuItem(Lang.LangNameEn);
+            _langEn.Click += (s, e) => OnLanguageChanged(LangId.EN);
+            UpdateLangChecks();
+            langMenu.DropDownItems.AddRange(new ToolStripItem[] { _langZhCn, _langZhTw, _langJa, _langEn });
+
+            ToolStripMenuItem about = new ToolStripMenuItem(Lang.MenuAbout);
             about.Click += (s, e) => ShowAboutDialog();
 
-            ToolStripMenuItem exit = new ToolStripMenuItem("退出");
+            ToolStripMenuItem exit = new ToolStripMenuItem(Lang.MenuExit);
             exit.Click += (s, e) => ExitApp();
 
             menu.Items.AddRange(new ToolStripItem[] {
                 _statusItem, new ToolStripSeparator(),
                 setHk, setColor, new ToolStripSeparator(),
                 _startupItem, new ToolStripSeparator(),
-                about, exit
+                langMenu, about, exit
             });
             return menu;
         }
 
         private void ShowAboutDialog()
         {
-            MessageBox.Show(
-                "VRC 麦克风切换工具\n" +
-                "Version：" + AppVersion.Version + "\n\n" +
-                "使用全局快捷键 通过OSC切换VRChat麦克风状态\n\n" +
-                "Tips:\n" +
-                "1. 在 VRChat 菜单中打开OSC（圆盘菜单>选项>OSC>开启）。\n" +
-                "2. VRChat 设置中\"麦克风工作模式\"为\"按下切换\"。\n\n" +
-                "当前快捷键：" + HotkeyDisplay() + "\n\n" +
-                "双击任务栏图标可快速切换麦克风状态~",
-                "关于", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            string body = string.Format(Lang.AboutBody, AppVersion.Version, HotkeyDisplay());
+            MessageBox.Show(body, Lang.AboutTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         // ════════════════════════════════════════════════════
@@ -482,7 +494,7 @@ namespace VRCMicToggle
                     _config.HotkeyMods = dlg.Modifiers;
                     _config.Save();
                     InvalidateHotkeyDisplay();
-                    ShowTip("快捷键设置为：" + _cachedHotkeyDisplay);
+                    ShowTip(Lang.HotkeySetTip + _cachedHotkeyDisplay);
                     AppLogger.Info("Hotkey changed to: " + _cachedHotkeyDisplay);
                 }
             }
@@ -502,6 +514,29 @@ namespace VRCMicToggle
                     SetIcon(st);
                 }
             }
+        }
+
+        private void OnLanguageChanged(string langId)
+        {
+            if (langId == _config.Language) return;
+            _config.Language = langId;
+            _config.Save();
+            Lang.SetLanguage(langId);
+            AppLogger.Info("Language changed to: " + langId);
+
+            // Rebuild tray menu to reflect new language
+            UpdateStatusText();
+            ContextMenuStrip oldMenu = _notify.ContextMenuStrip;
+            _notify.ContextMenuStrip = BuildMenu();
+            if (oldMenu != null) oldMenu.Dispose();
+        }
+
+        private void UpdateLangChecks()
+        {
+            _langZhCn.Checked = (_config.Language == LangId.ZH_CN);
+            _langZhTw.Checked = (_config.Language == LangId.ZH_TW);
+            _langJa.Checked   = (_config.Language == LangId.JA);
+            _langEn.Checked   = (_config.Language == LangId.EN);
         }
 
         private void InvalidateHotkeyDisplay()
@@ -525,9 +560,9 @@ namespace VRCMicToggle
             if (!ok)
             {
                 int err = Marshal.GetLastWin32Error();
-                string msg = "注册快捷键失败：" + _cachedHotkeyDisplay + " (错误码 " + err + ")\n 快捷键可能被占用";
+                string msg = string.Format(Lang.HotkeyRegFailBody, _cachedHotkeyDisplay, err);
                 ShowTip(msg);
-                MessageBox.Show(msg, "快捷键注册失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(msg, Lang.HotkeyRegFailTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             else
             {
@@ -651,7 +686,8 @@ namespace VRCMicToggle
                 }
             }
             lock (_listenerLock) { _tracking = false; }
-            ShowTip("无法监听 " + ListenPort + "-" + (ListenPort + ListenPortRetryCount - 1) + " 端口：" + (lastEx != null ? lastEx.Message : "未知错误") + "\n（端口可能被其他 OSC 工具占用，切换功能不受影响）");
+            ShowTip(string.Format(Lang.ListenFailTip, ListenPort, ListenPort + ListenPortRetryCount - 1,
+                lastEx != null ? lastEx.Message : (Lang.StateUnknown)));
         }
 
         private void StopListener()
@@ -856,17 +892,17 @@ namespace VRCMicToggle
 
         private void UpdateStatusText()
         {
-            string state = (_muted.HasValue ? (_muted.Value ? "关闭" : "开启") : "未知");
-            string newText = "VRC麦克风：" + state;
+            string state = (_muted.HasValue ? (_muted.Value ? Lang.StateMuted : Lang.StateUnmuted) : Lang.StateUnknown);
+            string newText = Lang.StatusPrefix + state;
             if (newText != _cachedStatusText)
             {
                 _cachedStatusText = newText;
                 _statusItem.Text = newText;
             }
-            string tip = "VRCMic：" + state + " | " + HotkeyDisplay();
+            string tip = Lang.TooltipPrefix + state + " | " + HotkeyDisplay();
             if (tip.Length > MaxTooltipLength)
             {
-                tip = "Mic:" + state;
+                tip = Lang.TooltipShortPrefix + state;
                 if (tip.Length > MaxTooltipLength) tip = tip.Substring(0, MaxTooltipLength);
             }
             if (tip != _cachedTipText)

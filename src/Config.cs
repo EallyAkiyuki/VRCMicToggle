@@ -15,6 +15,7 @@ namespace VRCMicToggle
         public string MutedColor = "#F48FB1";
         public string UnmutedColor = "#4FC3F7";
         public string SlashColor = "#ECECEC";
+        public string Language = LangId.ZH_CN;
 
         private static bool IsValidHexColor(string s)
         {
@@ -68,6 +69,10 @@ namespace VRCMicToggle
                             case "MutedColor": if (IsValidHexColor(v)) c.MutedColor = v; break;
                             case "UnmutedColor": if (IsValidHexColor(v)) c.UnmutedColor = v; break;
                             case "SlashColor": if (IsValidHexColor(v)) c.SlashColor = v; break;
+                            case "Language":
+                                if (v == LangId.ZH_CN || v == LangId.ZH_TW || v == LangId.JA || v == LangId.EN)
+                                    c.Language = v;
+                                break;
                         }
                     }
                 }
@@ -98,7 +103,8 @@ namespace VRCMicToggle
                     "UnknownColor=" + UnknownColor + "\r\n" +
                     "MutedColor=" + MutedColor + "\r\n" +
                     "UnmutedColor=" + UnmutedColor + "\r\n" +
-                    "SlashColor=" + SlashColor + "\r\n";
+                    "SlashColor=" + SlashColor + "\r\n" +
+                    "Language=" + Language + "\r\n";
 
                 // 先写临时文件再原子替换，防止写入中断导致配置丢失
                 string tmp = FilePath + ".tmp";

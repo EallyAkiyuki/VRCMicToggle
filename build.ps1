@@ -18,7 +18,8 @@ $sourceFiles = @(
     "src\Config.cs",
     "src\Theme.cs",
     "src\Controls.cs",
-    "src\HotkeyCaptureForm.cs"
+    "src\HotkeyCaptureForm.cs",
+    "src\Lang.cs"
 )
 
 if (-not (Test-Path $outDir)) {

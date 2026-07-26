@@ -112,7 +112,7 @@ namespace VRCMicToggle
 
         private void BuildUI()
         {
-            Text = "选择颜色";
+            Text = Lang.ColorPickerTitle;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -143,7 +143,7 @@ namespace VRCMicToggle
             int hueLabelY = slBottom + 10;
             Label hueLabel = new Label
             {
-                Text = "色相",
+                Text = Lang.HueLabel,
                 ForeColor = _subFg,
                 Location = new Point(pad, hueLabelY),
                 AutoSize = true
@@ -168,7 +168,7 @@ namespace VRCMicToggle
 
             Label previewTitle = new Label
             {
-                Text = "预览",
+                Text = Lang.PreviewLabel,
                 Font = _uiFontBold,
                 ForeColor = _fg,
                 Location = new Point(rx, ry),
@@ -219,7 +219,7 @@ namespace VRCMicToggle
 
             Label presetLabel = new Label
             {
-                Text = "预设",
+                Text = Lang.PresetLabel,
                 Font = _uiFontBold,
                 ForeColor = _fg,
                 Location = new Point(rx, ry),
@@ -241,7 +241,7 @@ namespace VRCMicToggle
 
             Label recentLabel = new Label
             {
-                Text = "最近使用",
+                Text = Lang.RecentLabel,
                 Font = _uiFontBold,
                 ForeColor = _fg,
                 Location = new Point(rx, ry),
@@ -262,11 +262,11 @@ namespace VRCMicToggle
             Controls.Add(_recentPanel);
             ry += _recentPanel.Height + 18;
 
-            Button okBtn = MakeButton("确定", OnOk, true);
+            Button okBtn = MakeButton(Lang.BtnOk, OnOk, true);
             okBtn.Location = new Point(rx + rightW - okBtn.Width, ry);
             Controls.Add(okBtn);
 
-            Button cancelBtn = MakeButton("取消", OnCancel, false);
+            Button cancelBtn = MakeButton(Lang.BtnCancel, OnCancel, false);
             cancelBtn.Location = new Point(okBtn.Left - cancelBtn.Width - 8, ry);
             Controls.Add(cancelBtn);
 
@@ -462,9 +462,9 @@ namespace VRCMicToggle
 
             if (_previewFont == null) return; // defensive; should always be pre-created
             using (var br = new SolidBrush(TextColorFor(current)))
-                e.Graphics.DrawString("当前", _previewFont, br, 6, 36);
+                e.Graphics.DrawString(Lang.CurrentLabel, _previewFont, br, 6, 36);
             using (var br = new SolidBrush(TextColorFor(initial)))
-                e.Graphics.DrawString("初始", _previewFont, br, half + 6, 36);
+                e.Graphics.DrawString(Lang.OriginalLabel, _previewFont, br, half + 6, 36);
         }
 
         private static Color TextColorFor(Color c)
@@ -483,7 +483,7 @@ namespace VRCMicToggle
             if (_recentColors.Count == 0)
             {
                 using (var br = new SolidBrush(_subFg))
-                    e.Graphics.DrawString("没有最近使用", Font, br, 0, 2);
+                    e.Graphics.DrawString(Lang.NoRecentColors, Font, br, 0, 2);
                 return;
             }
             PaintSwatches(e.Graphics, _recentColorsParsed);

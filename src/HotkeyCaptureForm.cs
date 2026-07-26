@@ -51,7 +51,7 @@ namespace VRCMicToggle
 
         private void BuildUi()
         {
-            Text = "设置你的快捷键喵";
+            Text = Lang.HotkeyFormTitle;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -63,7 +63,7 @@ namespace VRCMicToggle
 
             _comboLabel = new Label
             {
-                Text = "当前组合：(等待输入)",
+                Text = Lang.ComboWaiting,
                 Font = TrackFont(new Font("Segoe UI", 11.5f, FontStyle.Bold)),
                 Location = new Point(10, 14),
                 Size = new Size(380, 36),
@@ -73,7 +73,7 @@ namespace VRCMicToggle
 
             var hint = new Label
             {
-                Text = "按下组合后松开即可锁定\n按 Enter 确认 / Esc 清除",
+                Text = Lang.HotkeyHint,
                 Location = new Point(10, 54),
                 Size = new Size(380, 42),
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -82,9 +82,9 @@ namespace VRCMicToggle
             Controls.Add(hint);
 
             int btnY = 112;
-            var clearBtn = ColorUtil.MakeButton("清除", OnClear, false, false, Color.Black);
-            var confirmBtn = ColorUtil.MakeButton("确认", OnConfirm, true, false, Color.Black);
-            var cancelBtn = ColorUtil.MakeButton("取消", OnCancel, false, false, Color.Black);
+            var clearBtn = ColorUtil.MakeButton(Lang.BtnClear, OnClear, false, false, Color.Black);
+            var confirmBtn = ColorUtil.MakeButton(Lang.BtnConfirm, OnConfirm, true, false, Color.Black);
+            var cancelBtn = ColorUtil.MakeButton(Lang.BtnCancel, OnCancel, false, false, Color.Black);
 
             int gap = 20;
             int totalW = clearBtn.Width + confirmBtn.Width + cancelBtn.Width + gap * 2;
@@ -149,8 +149,8 @@ namespace VRCMicToggle
             if ((_capturedMods & AppContext.MOD_ALT) != 0) sb.Append("Alt + ");
             if ((_capturedMods & AppContext.MOD_SHIFT) != 0) sb.Append("Shift + ");
             if ((_capturedMods & AppContext.MOD_WIN) != 0) sb.Append("Win + ");
-            sb.Append(_hasMainKey ? AppContext.KeyName((uint)_capturedKey) : "(等待主键)");
-            _comboLabel.Text = "当前组合：" + sb.ToString();
+            sb.Append(_hasMainKey ? AppContext.KeyName((uint)_capturedKey) : Lang.WaitingMainKey);
+            _comboLabel.Text = Lang.ComboPrefix + sb.ToString();
         }
 
         // ── 按钮事件 ──────────────────────────────────────
@@ -159,15 +159,15 @@ namespace VRCMicToggle
         {
             if (!_hasMainKey)
             {
-                ShowMsg("请按一个主键（如字母、数字、F1-F24 等）\n\n不能只用修饰键");
+                ShowMsg(Lang.NeedMainKeyMsg);
                 return;
             }
 
             if (_capturedMods == 0)
             {
                 var r = MessageBox.Show(this,
-                    "单独使用此键容易与其他程序冲突，确定要使用吗？",
-                    "警告", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    Lang.NoModWarningMsg,
+                    Lang.WarningTitle, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (r == DialogResult.No) return;
             }
 
@@ -178,7 +178,7 @@ namespace VRCMicToggle
             if (!AppContext.RegisterHotKey(_targetHandle, AppContext.HOTKEY_ID, mods | AppContext.MOD_NOREPEAT, vk))
             {
                 int err = Marshal.GetLastWin32Error();
-                ShowMsg("该快捷键已被其他程序占用（错误码 " + err + "）\n\n请更换组合");
+                ShowMsg(string.Format(Lang.HotkeyConflictMsg, err));
                 return;
             }
             AppContext.UnregisterHotKey(_targetHandle, AppContext.HOTKEY_ID);
@@ -209,7 +209,7 @@ namespace VRCMicToggle
 
         private void ShowMsg(string text)
         {
-            MessageBox.Show(this, text, "提示",
+            MessageBox.Show(this, text, Lang.InfoTitle,
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 

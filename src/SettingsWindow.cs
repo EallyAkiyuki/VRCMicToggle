@@ -65,7 +65,7 @@ namespace VRCMicToggle
 
         private void BuildUI()
         {
-            Text = "颜色设置";
+            Text = Lang.SettingsTitle;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -80,7 +80,7 @@ namespace VRCMicToggle
 
             Label title = new Label
             {
-                Text = "自定义麦克风颜色",
+                Text = Lang.SettingsSubtitle,
                 Font = TrackFont(new Font("Segoe UI", 15f, FontStyle.Bold)),
                 ForeColor = _fg,
                 Location = new Point(pad, y),
@@ -91,7 +91,7 @@ namespace VRCMicToggle
 
             Label hint = new Label
             {
-                Text = "点击色块打开颜色选择器喵",
+                Text = Lang.SettingsHint,
                 Font = TrackFont(new Font("Segoe UI", 9f)),
                 ForeColor = _subFg,
                 Location = new Point(pad, y),
@@ -100,7 +100,7 @@ namespace VRCMicToggle
             Controls.Add(hint);
             y += hint.Height + 22;
 
-            string[] labels = { "未知状态", "已静音", "已开麦", "斜杠颜色" };
+            string[] labels = Lang.ColorLabels;
 
             for (int i = 0; i < ColorCount; i++)
             {
@@ -153,7 +153,7 @@ namespace VRCMicToggle
 
             Label previewTitle = new Label
             {
-                Text = "图标预览",
+                Text = Lang.IconPreviewTitle,
                 Font = TrackFont(new Font("Segoe UI", 10f, FontStyle.Bold)),
                 ForeColor = _fg,
                 Location = new Point(pad, y),
@@ -163,7 +163,7 @@ namespace VRCMicToggle
             y += previewTitle.Height + 16;
 
             int px = pad + 36;
-            string[] iconLabels = { "未知", "静音", "开麦" };
+            string[] iconLabels = Lang.IconPreviewLabels;
             for (int i = 0; i < 3; i++)
             {
                 _iconPreviews[i] = MakePreviewBox(ref px, y, iconLabels[i]);
@@ -184,17 +184,17 @@ namespace VRCMicToggle
             };
             Controls.Add(bottomPanel);
 
-            Button defaultBtn = MakeButton("恢复默认", OnRestoreDefaults, false);
+            Button defaultBtn = MakeButton(Lang.BtnRestoreDefaults, OnRestoreDefaults, false);
             defaultBtn.Location = new Point(pad, 12);
             bottomPanel.Controls.Add(defaultBtn);
 
             int bx = FormWidth - pad;
-            Button saveBtn = MakeButton("保存", OnSave, true);
+            Button saveBtn = MakeButton(Lang.BtnSave, OnSave, true);
             saveBtn.Location = new Point(bx - saveBtn.Width, 12);
             bx -= saveBtn.Width + 8;
             bottomPanel.Controls.Add(saveBtn);
 
-            Button cancelBtn = MakeButton("取消", OnCancel, false);
+            Button cancelBtn = MakeButton(Lang.BtnCancel, OnCancel, false);
             cancelBtn.Location = new Point(bx - cancelBtn.Width, 12);
             bx -= cancelBtn.Width + 8;
             bottomPanel.Controls.Add(cancelBtn);
